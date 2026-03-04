@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>THE CORTEX: DIFFERENTIAL GROWTH</title>
+    <style>
+        body { margin: 0; background: #050505; overflow: hidden; font-family: monospace; color: #ddd; }
+        canvas { display: block; }
+        
+        #ui {
+            position: absolute; top: 20px; left: 20px;
+            pointer-events: none;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-left: 2px solid #ff4444;
+        }
+        h1 { margin: 0; font-size: 14px; color: #ff4444; }
+        p { margin: 5px 0 0 0; font-size: 11px; color: #888; }
+        .key { color: #fff; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <h1>Cortex Growth Engine</h1>
+    <p>Nodes: <span id="count">0</span></p>
+    <p><span class="key">Left Click</span> - Inject Nutrient (Rapid Growth)</p>
+    <p><span class="key">Space</span> - Pause/Play</p>
+    <p><span class="key">R</span> - Reset</p>
+</div>
+
+<canvas id="c"></canvas>
+
+<script>
+/**
+ * DIFFERENTIAL GROWTH ENGINE
+ * Concept: Nodes repel each other, but are tied by springs.
+ * When springs stretch, we inject new nodes.
+ * Result: Complex folding and organic buckling.
+ */
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let width, height;
+let nodes = [];
+let paused = false;
+let mouse = { x: 0, y: 0, down: false };
+
+// --- CONFIGURATION ---
+const CONFIG = {
+    repulsionDist: 18,    // How much personal space nodes want
+    repulsionForce: 0.8,  // How hard they push away
+    springDist: 10,       // Ideal distance between connected nodes
+    springForce: 0.1,     // How hard springs pull back
+    growthThreshold: 15,  // Distance at which cell divides
+    centerPull: 0.005,    // Gentle gravity to keep it centered
+    maxNodes: 3000        // Performance cap
+};
+
+// --- SPATIAL HASH GRID (Optimization) ---
+// Allows us to only check collisions with nearby nodes
+class SpatialHash {
+    constructor(cellSize) {
+        this.cellSize = cellSize;
+        this.grid = new Map();
+    }
+    
+    key(x, y) {
+        const cx = Math.floor(x / this.cellSize);
+        const cy = Math.floor(y / this.cellSize);
+        return `${cx},${cy}`;
+    }
+    
+    clear() {
+        this.grid.clear();
+    }
+    
+    insert(node) {
+        const k = this.key(node.x, node.y);
+        if (!this.grid.has(k)) this.grid.set(k, []);
+        this.grid.get(k).push(node);
+    }
+    
+    query(x, y) {
+        const cx = Math.floor(x / this.cellSize);
+        const cy = Math.floor(y / this.cellSize);
+        let found = [];
+        
+        // Check 3x3 neighbor grids
+        for(let i = -1; i <= 1; i++) {
+            for(let j = -1; j <= 1; j++) {
+                const k = `${cx + i},${cy + j}`;
+                if (this.grid.has(k)) {
+                    found = found.concat(this.grid.get(k));
+                }
+            }
+        }
+        return found;
+    }
+}
+
+const grid = new SpatialHash(CONFIG.repulsionDist * 2);
+
+// --- NODE CLASS ---
+class Node {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.vx = 0;
+        this.vy = 0;
+        this.fx = 0;
+        this.fy = 0;
+        this.fixed = false; // If true, node doesn't move
+        this.age = 0;
+    }
+
+    applyForce(x, y) {
+        this.fx += x;
+        this.fy += y;
+    }
+
+    update() {
+        if (this.fixed) return;
+
+        // Velocity damping (friction)
+        this.vx *= 0.8;
+        this.vy *= 0.8;
+
+        // Add accumulated forces to velocity
+        this.vx += this.fx;
+        this.vy += this.fy;
+
+        // Limit speed to prevent explosions
+        const speed = Math.hypot(this.vx, this.vy);
+        const maxSpeed = 5;
+        if (speed > maxSpeed) {
+            this.vx = (this.vx / speed) * maxSpeed;
+            this.vy = (this.vy / speed) * maxSpeed;
+        }
+
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // Reset forces
+        this.fx = 0;
+        this.fy = 0;
+        this.age++;
+    }
+}
+
+// --- INIT ---
+function init() {
+    nodes = [];
+    const r = 20;
+    const segments = 20;
+    const cx = width / 2;
+    const cy = height / 2;
+
+    // Create initial ring
+    for(let i = 0; i < segments; i++) {
+        const theta = (i / segments) * Math.PI * 2;
+        const x = cx + Math.cos(theta) * r;
+        const y = cy + Math.sin(theta) * r;
+        nodes.push(new Node(x, y));
+    }
+}
+
+// --- PHYSICS LOOP ---
+function step() {
+    if (paused) return;
+
+    // 1. Build Spatial Grid
+    grid.clear();
+    nodes.forEach(n => grid.insert(n));
+
+    // 2. Calculate Forces
+    for (let i = 0; i < nodes.length; i++) {
+        let n = nodes[i];
+        
+        // Link Indices (Circular buffer)
+        let prev = nodes[(i - 1 + nodes.length) % nodes.length];
+        let next = nodes[(i + 1) % nodes.length];
+
+        // A. Spring Forces (Attraction to neighbors)
+        const spring = (target) => {
+            const dx = target.x - n.x;
+            const dy = target.y - n.y;
+            const dist = Math.hypot(dx, dy);
+            // Hooke's Law: Pull towards ideal distance
+            const delta = dist - CONFIG.springDist; 
+            const force = delta * CONFIG.springForce;
+            
+            const nx = dx / dist;
+            const ny = dy / dist;
+            
+            n.applyForce(nx * force, ny * force);
+        };
+        
+        spring(prev);
+        spring(next);
+
+        // B. Repulsion (Push away neighbors)
+        const neighbors = grid.query(n.x, n.y);
+        for (let other of neighbors) {
+            if (other === n) continue;
+            // Don't repel immediate neighbors (spring handles that)
+            if (other === prev || other === next) continue; 
+
+            const dx = n.x - other.x;
+            const dy = n.y - other.y;
+            const distSq = dx*dx + dy*dy;
+            const minDistSq = CONFIG.repulsionDist * CONFIG.repulsionDist;
+
+            if (distSq < minDistSq && distSq > 0) {
+                const dist = Math.sqrt(distSq);
+                const force = (CONFIG.repulsionDist - dist) / CONFIG.repulsionDist; // 0 to 1
+                const fx = (dx / dist) * force * CONFIG.repulsionForce;
+                const fy = (dy / dist) * force * CONFIG.repulsionForce;
+                n.applyForce(fx, fy);
+            }
+        }
+
+        // C. Center Gravity (Keep on screen)
+        const dx = (width/2) - n.x;
+        const dy = (height/2) - n.y;
+        n.applyForce(dx * CONFIG.centerPull, dy * CONFIG.centerPull);
+
+        // D. Mouse Attraction (Nutrient)
+        if (mouse.down) {
+            const mdx = mouse.x - n.x;
+            const mdy = mouse.y - n.y;
+            const mdist = Math.hypot(mdx, mdy);
+            if (mdist < 200) {
+                // Pull strong
+                n.applyForce(mdx * 0.01, mdy * 0.01);
+                // Reduce repulsion locally to allow density
+                // n.applyForce((Math.random()-0.5), (Math.random()-0.5));
+            }
+        }
+    }
+
+    // 3. Update Positions & Growth
+    for (let i = 0; i < nodes.length; i++) {
+        nodes[i].update();
+    }
+
+    // 4. Injection (Growth)
+    // We iterate backwards so inserting doesn't mess up indices
+    if (nodes.length < CONFIG.maxNodes) {
+        for (let i = nodes.length - 1; i >= 0; i--) {
+            let n = nodes[i];
+            let next = nodes[(i + 1) % nodes.length];
+            
+            const dx = next.x - n.x;
+            const dy = next.y - n.y;
+            const dist = Math.hypot(dx, dy);
+
+            // If spring is stretched too thin, split!
+            // Mouse interaction lowers threshold (faster growth)
+            let threshold = CONFIG.growthThreshold;
+            if (mouse.down) {
+                const dToMouse = Math.hypot(mouse.x - n.x, mouse.y - n.y);
+                if (dToMouse < 200) threshold *= 0.6;
+            }
+
+            if (dist > threshold) {
+                // Create new node in middle
+                const midX = n.x + dx * 0.5;
+                const midY = n.y + dy * 0.5;
+                const newNode = new Node(midX, midY);
+                
+                // Inject into array
+                if (i === nodes.length - 1) {
+                    nodes.push(newNode);
+                } else {
+                    nodes.splice(i + 1, 0, newNode);
+                }
+                
+                // Stop to prevent infinite growth in one frame
+                break; 
+            }
+        }
+    }
+}
+
+// --- RENDER ---
+function draw() {
+    ctx.fillStyle = '#050505';
+    ctx.fillRect(0, 0, width, height);
+
+    if (nodes.length === 0) return;
+
+    // Draw Connections
+    ctx.beginPath();
+    
+    // Smooth spline
+    // To make it look "organic", we use quadratic curves between midpoints
+    let p0 = nodes[0];
+    let p1 = nodes[1];
+    
+    ctx.moveTo((p0.x + p1.x)/2, (p0.y + p1.y)/2);
+
+    for (let i = 1; i < nodes.length; i++) {
+        let pCurrent = nodes[i];
+        let pNext = nodes[(i + 1) % nodes.length];
+        
+        // Midpoint
+        let mx = (pCurrent.x + pNext.x) / 2;
+        let my = (pCurrent.y + pNext.y) / 2;
+        
+        ctx.quadraticCurveTo(pCurrent.x, pCurrent.y, mx, my);
+    }
+    
+    // Close loop
+    let last = nodes[nodes.length-1];
+    let first = nodes[0];
+    let second = nodes[1];
+    let mx = (first.x + second.x)/2;
+    let my = (first.y + second.y)/2;
+    ctx.quadraticCurveTo(first.x, first.y, mx, my);
+
+    // Styling
+    ctx.lineWidth = 2;
+    
+    // Create gradient based on center
+    const grad = ctx.createRadialGradient(width/2, height/2, 10, width/2, height/2, Math.min(width,height)/2);
+    grad.addColorStop(0, '#ff4444');  // Center hot
+    grad.addColorStop(0.5, '#aa0044'); 
+    grad.addColorStop(1, '#220011');  // Edge dark
+
+    ctx.strokeStyle = grad;
+    ctx.stroke();
+
+    // Draw "Cells"
+    // Only draw detailed circles if node count is low, otherwise it gets too cluttered
+    /*
+    if (nodes.length < 1000) {
+        ctx.fillStyle = '#fff';
+        for(let n of nodes) {
+            ctx.beginPath();
+            ctx.arc(n.x, n.y, 1, 0, Math.PI*2);
+            ctx.fill();
+        }
+    }
+    */
+    
+    // Mouse Guide
+    if (mouse.down) {
+        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(255, 68, 68, 0.2)';
+        ctx.arc(mouse.x, mouse.y, 200, 0, Math.PI*2);
+        ctx.stroke();
+    }
+}
+
+function loop() {
+    step();
+    draw();
+    document.getElementById('count').innerText = nodes.length;
+    requestAnimationFrame(loop);
+}
+
+// --- EVENTS ---
+window.addEventListener('resize', () => {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+    if(nodes.length === 0) init();
+});
+
+window.addEventListener('mousemove', e => {
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+});
+window.addEventListener('mousedown', () => mouse.down = true);
+window.addEventListener('mouseup', () => mouse.down = false);
+window.addEventListener('keydown', e => {
+    if (e.code === 'Space') paused = !paused;
+    if (e.code === 'KeyR') init();
+});
+
+// Start
+width = window.innerWidth;
+height = window.innerHeight;
+canvas.width = width;
+canvas.height = height;
+init();
+loop();
+
+</script>
+</body>
+</html>

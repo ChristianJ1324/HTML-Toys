@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>High-Fidelity Cloth Sim</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #0d0d0d;
+            font-family: 'Segoe UI', sans-serif;
+            color: #eee;
+        }
+        canvas { display: block; }
+        
+        #ui {
+            position: absolute; top: 20px; left: 20px;
+            background: rgba(20, 20, 20, 0.85);
+            padding: 20px;
+            border-left: 4px solid #00ccff;
+            border-radius: 4px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+            pointer-events: auto; /* Allow slider interaction */
+            width: 220px;
+            backdrop-filter: blur(5px);
+        }
+        
+        h3 { margin: 0 0 10px 0; font-weight: 400; letter-spacing: 2px; color: #00ccff; }
+        p { font-size: 12px; color: #aaa; margin-bottom: 15px; line-height: 1.4; }
+        b { color: #fff; }
+
+        /* Slider Styling */
+        .control-group { margin-top: 15px; }
+        label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #888; display: block; margin-bottom: 5px; }
+        
+        input[type="range"] {
+            width: 100%; -webkit-appearance: none; height: 4px; background: #444; border-radius: 2px; outline: none;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 14px; height: 14px; background: #00ccff; border-radius: 50%; cursor: pointer; transition: transform 0.1s;
+        }
+        input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+    </style>
+</head>
+<body oncontextmenu="return false;">
+
+    <div id="ui">
+        <h3>CLOTH 2.0</h3>
+        <p>
+            Left Click: <b>Grab & Drag</b><br>
+            Right Click: <b>Cut Fabric</b><br>
+        </p>
+        
+        <div class="control-group">
+            <label>Tension (Stiffness): <span id="val_tension">5</span></label>
+            <input type="range" id="slider_tension" min="1" max="20" step="1" value="8">
+        </div>
+        
+        <div class="control-group">
+            <label>Gravity: <span id="val_grav">900</span></label>
+            <input type="range" id="slider_grav" min="0" max="2000" step="50" value="900">
+        </div>
+
+        <div class="control-group">
+            <button onclick="resetCloth()" style="width:100%; padding:8px; background:#333; color:#fff; border:1px solid #555; cursor:pointer;">RESET GRID</button>
+        </div>
+    </div>
+    
+    <canvas id="c"></canvas>
+
+<script>
+    // --- SETTINGS ---
+    let physics_accuracy = 8; // Controlled by slider
+    let gravity = 900;        // Controlled by slider
+    const mouse_influence = 30;  
+    const mouse_cut = 12;
+    
+    // Increased density
+    const cloth_height = 50;
+    const cloth_width = 90;
+    const start_y = 20;
+    const spacing = 9; 
+    const tear_distance = 50; 
+
+    // --- SETUP ---
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let width, height;
+
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // --- PHYSICS ENGINE ---
+    
+    class Point {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            this.px = x;
+            this.py = y;
+            this.vx = 0;
+            this.vy = 0;
+            this.pin_x = null;
+            this.pin_y = null;
+        }
+
+        update(delta) {
+            if (this.pin_x != null) return;
+
+            // Mouse Interaction
+            if (mouse.down) {
+                const dx = this.x - mouse.x;
+                const dy = this.y - mouse.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+
+                if (mouse.button === 0 && dist < mouse_influence && mouse.dragPoint === null) {
+                    mouse.dragPoint = this;
+                }
+            }
+            
+            if (mouse.dragPoint === this) {
+                this.px = this.x = mouse.x;
+                this.py = this.y = mouse.y;
+            }
+
+            // Verlet Integration
+            // 0.99 = Friction (Air Resistance)
+            this.vx = (this.x - this.px) * 0.99; 
+            this.vy = (this.y - this.py) * 0.99;
+
+            this.px = this.x;
+            this.py = this.y;
+
+            this.x += this.vx;
+            this.y += this.vy;
+            this.y += gravity * delta * delta;
+        }
+
+        resolve_constraints() {
+            if (this.pin_x != null) {
+                this.x = this.pin_x;
+                this.y = this.pin_y;
+                return;
+            }
+            // Screen Bounds (Bounce slightly off walls)
+            if (this.x >= width) { this.x = width; this.px = this.x + this.vx * 0.9; }
+            else if (this.x <= 0) { this.x = 0; this.px = this.x + this.vx * 0.9; }
+
+            if (this.y >= height) { this.y = height; this.py = this.y + this.vy * 0.9; }
+            else if (this.y <= 0) { this.y = 0; this.py = this.y + this.vy * 0.9; }
+        }
+
+        attach(x, y) {
+            this.pin_x = x;
+            this.pin_y = y;
+        }
+    }
+
+    class Constraint {
+        constructor(p1, p2) {
+            this.p1 = p1;
+            this.p2 = p2;
+            this.length = spacing;
+        }
+
+        resolve() {
+            const dx = this.p1.x - this.p2.x;
+            const dy = this.p1.y - this.p2.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            
+            // Tearing logic
+            if (dist > tear_distance) {
+                this.p1.remove_constraint(this);
+                return; // Stop calculation for this link
+            }
+
+            const diff = (this.length - dist) / dist;
+
+            // Move points
+            const px = dx * diff * 0.5;
+            const py = dy * diff * 0.5;
+
+            if (!this.p1.pin_x) {
+                this.p1.x += px;
+                this.p1.y += py;
+            }
+            if (!this.p2.pin_x) {
+                this.p2.x -= px;
+                this.p2.y -= py;
+            }
+        }
+
+        draw() {
+            ctx.moveTo(this.p1.x, this.p1.y);
+            ctx.lineTo(this.p2.x, this.p2.y);
+        }
+    }
+
+    // --- SIMULATION STATE ---
+    let points = [];
+    let constraints = [];
+
+    Point.prototype.remove_constraint = function(lnk) {
+        const i = constraints.indexOf(lnk);
+        if (i > -1) constraints.splice(i, 1);
+    };
+
+    function init() {
+        points = [];
+        constraints = [];
+        const start_x = (width / 2) - (cloth_width * spacing) / 2;
+
+        for (let y = 0; y <= cloth_height; y++) {
+            for (let x = 0; x <= cloth_width; x++) {
+                const p = new Point(start_x + x * spacing, start_y + y * spacing);
+                
+                // Pin logic: Pin every 8th point on the top row
+                if (y === 0 && x % 8 === 0) { 
+                    p.attach(p.x, p.y);
+                } 
+
+                points.push(p);
+
+                // Create Links (Grid structure)
+                if (x > 0) {
+                    constraints.push(new Constraint(points[points.length - 1], points[points.length - 2]));
+                }
+                if (y > 0) {
+                    constraints.push(new Constraint(points[points.length - 1], points[x + (y - 1) * (cloth_width + 1)]));
+                }
+            }
+        }
+    }
+    window.resetCloth = init; // Expose to button
+
+    // --- MAIN LOOP ---
+    function update() {
+        const delta = 0.016; 
+
+        // Mouse Cut Logic (Right Click)
+        if (mouse.down && mouse.button === 2) {
+            for (let i = constraints.length - 1; i >= 0; i--) {
+                const c = constraints[i];
+                // Check dist from mouse to midpoint of constraint
+                const mx = (c.p1.x + c.p2.x) / 2;
+                const my = (c.p1.y + c.p2.y) / 2;
+                const dx = mouse.x - mx;
+                const dy = mouse.y - my;
+                if (dx*dx + dy*dy < mouse_cut * mouse_cut) {
+                    constraints.splice(i, 1);
+                }
+            }
+        }
+
+        // 1. Update Points
+        for (let i = 0; i < points.length; i++) {
+            points[i].update(delta);
+        }
+
+        // 2. Resolve Constraints (Stiffness loop)
+        // More iterations = Stiffer cloth
+        for (let j = 0; j < physics_accuracy; j++) {
+            for (let i = 0; i < constraints.length; i++) {
+                constraints[i].resolve();
+            }
+            for (let i = 0; i < points.length; i++) {
+                points[i].resolve_constraints();
+            }
+        }
+
+        // 3. Render
+        ctx.clearRect(0, 0, width, height);
+
+        ctx.beginPath();
+        // Visual Style: Semi-transparent white for a "gauze" look
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)'; 
+        ctx.lineWidth = 1;
+        for (let i = 0; i < constraints.length; i++) {
+            constraints[i].draw();
+        }
+        ctx.stroke();
+
+        requestAnimationFrame(update);
+    }
+
+    // --- INPUT HANDLING ---
+    const mouse = { x: 0, y: 0, px: 0, py: 0, down: false, button: 0, dragPoint: null };
+
+    canvas.onmousedown = function(e) {
+        mouse.button = e.button;
+        mouse.down = true;
+    };
+    
+    window.onmouseup = function(e) {
+        mouse.down = false;
+        mouse.dragPoint = null;
+    };
+
+    window.onmousemove = function(e) {
+        mouse.px = mouse.x;
+        mouse.py = mouse.y;
+        mouse.x = e.clientX;
+        mouse.y = e.clientY;
+    };
+
+    // --- UI LISTENERS ---
+    const tSlider = document.getElementById('slider_tension');
+    const gSlider = document.getElementById('slider_grav');
+    const tVal = document.getElementById('val_tension');
+    const gVal = document.getElementById('val_grav');
+
+    tSlider.oninput = function() {
+        physics_accuracy = parseInt(this.value);
+        tVal.innerText = physics_accuracy;
+    };
+
+    gSlider.oninput = function() {
+        gravity = parseInt(this.value);
+        gVal.innerText = gravity;
+    };
+
+    // --- START ---
+    init();
+    update();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>THE HYPER-CUBE: 4D ENGINE</title>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Courier New', monospace; color: #fff; }
+        canvas { display: block; filter: blur(0.5px) contrast(1.2); }
+        
+        #ui {
+            position: absolute; top: 20px; left: 20px;
+            width: 300px;
+            background: rgba(0, 0, 0, 0.85);
+            border: 1px solid #444;
+            padding: 15px;
+            pointer-events: auto;
+            user-select: none;
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.05);
+        }
+
+        h1 { margin: 0 0 10px 0; font-size: 16px; color: #fff; text-transform: uppercase; border-bottom: 1px solid #fff; padding-bottom: 5px; }
+        
+        .control { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 11px; }
+        label { color: #888; width: 50px; }
+        input[type=range] { flex: 1; cursor: pointer; accent-color: #fff; height: 4px; background: #333; appearance: none; border-radius: 2px; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 10px; height: 10px; background: #fff; border-radius: 50%; }
+        
+        .val { width: 30px; text-align: right; color: #fff; font-weight: bold; }
+
+        .group { border-top: 1px solid #333; margin-top: 10px; padding-top: 10px; }
+        .group-title { font-size: 10px; color: #555; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 1px; }
+
+        #readout {
+            position: absolute; bottom: 20px; right: 20px;
+            text-align: right; font-size: 10px; color: #444;
+        }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <h1>4D Tesseract Engine</h1>
+    
+    <div class="group-title">4th Dimensional Rotations</div>
+    <div class="control"><label>XW</label><input type="range" id="rXW" min="0" max="6.28" step="0.01" value="0"><span class="val" id="vXW">0</span></div>
+    <div class="control"><label>YW</label><input type="range" id="rYW" min="0" max="6.28" step="0.01" value="0"><span class="val" id="vYW">0</span></div>
+    <div class="control"><label>ZW</label><input type="range" id="rZW" min="0" max="6.28" step="0.01" value="0"><span class="val" id="vZW">0</span></div>
+
+    <div class="group">
+        <div class="group-title">Projection Optics</div>
+        <div class="control"><label>Zoom</label><input type="range" id="zoom" min="0.5" max="3" step="0.1" value="1.8"></div>
+        <div class="control"><label>Trail</label><input type="range" id="trail" min="0.05" max="0.9" step="0.01" value="0.2"></div>
+    </div>
+
+    <div class="group">
+        <div class="control"><label style="width: auto; margin-right: 10px;">AUTO-ROTATE 4D</label> <input type="checkbox" id="auto" checked></div>
+    </div>
+</div>
+
+<div id="readout">
+    VERTICES: 16<br>
+    EDGES: 32<br>
+    FACES: 24<br>
+    CELLS: 8
+</div>
+
+<canvas id="c"></canvas>
+
+<script>
+/**
+ * THE 4D MATH CORE
+ * We are not using WebGL because I want manual control over the projection stroke quality.
+ * We are manually multiplying 4D Matrices on the CPU.
+ */
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let width, height;
+let cx, cy;
+
+// --- 4D GEOMETRY ---
+// A Tesseract has 16 vertices (corners)
+// Coordinates are +/- 1 for X, Y, Z, W
+let points = [];
+for (let i = 0; i < 16; i++) {
+    points.push({
+        x: (i & 1) ? 1 : -1,
+        y: (i & 2) ? 1 : -1,
+        z: (i & 4) ? 1 : -1,
+        w: (i & 8) ? 1 : -1
+    });
+}
+
+// 32 Edges connect the vertices
+// We calculate edges by finding points that differ by exactly 1 coordinate
+let edges = [];
+for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+        let diff = 0;
+        let p1 = points[i];
+        let p2 = points[j];
+        if (p1.x !== p2.x) diff++;
+        if (p1.y !== p2.y) diff++;
+        if (p1.z !== p2.z) diff++;
+        if (p1.w !== p2.w) diff++;
+        if (diff === 1) {
+            edges.push([i, j]);
+        }
+    }
+}
+
+// --- MATRIX MATH HELPERS ---
+function mult(v, m) {
+    let x = v.x, y = v.y, z = v.z, w = v.w;
+    // We only implement rotation matrices where rows/cols are sparse, 
+    // but for clarity let's just do the specific rotations directly in the loop.
+    return {x, y, z, w}; // Placeholder
+}
+
+// --- STATE ---
+let angles = { xw: 0, yw: 0, zw: 0, xy: 0, xz: 0, yz: 0 };
+let mouse = { x: 0, y: 0, down: false, lastX: 0, lastY: 0 };
+
+// --- MAIN LOOP ---
+function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+    cx = width / 2;
+    cy = height / 2;
+    // Set line styles once
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+}
+window.addEventListener('resize', resize);
+resize();
+
+// UI HANDLING
+const uiXW = document.getElementById('rXW');
+const uiYW = document.getElementById('rYW');
+const uiZW = document.getElementById('rZW');
+const uiZoom = document.getElementById('zoom');
+const uiTrail = document.getElementById('trail');
+const uiAuto = document.getElementById('auto');
+
+function loop() {
+    // 1. Trails / Fade
+    // Instead of clearRect, we fillRect with low opacity to create trails
+    ctx.fillStyle = `rgba(0, 0, 0, ${1 - parseFloat(uiTrail.value)})`;
+    ctx.fillRect(0, 0, width, height);
+
+    // 2. Update Angles
+    if (uiAuto.checked) {
+        angles.xw += 0.005;
+        angles.yw += 0.003;
+        angles.xy += 0.002;
+        
+        // Sync sliders to auto
+        uiXW.value = angles.xw % 6.28;
+        uiYW.value = angles.yw % 6.28;
+    } else {
+        angles.xw = parseFloat(uiXW.value);
+        angles.yw = parseFloat(uiYW.value);
+        angles.zw = parseFloat(uiZW.value);
+    }
+    
+    // Update text
+    document.getElementById('vXW').innerText = angles.xw.toFixed(2);
+    document.getElementById('vYW').innerText = angles.yw.toFixed(2);
+    document.getElementById('vZW').innerText = angles.zw.toFixed(2);
+
+    // 3. Transform Points
+    let projected3D = [];
+    
+    // Scale param
+    let scale = 200 * parseFloat(uiZoom.value);
+
+    for (let i = 0; i < points.length; i++) {
+        let p = { ...points[i] }; // Copy
+
+        // --- 4D ROTATIONS (The Brain Melting Part) ---
+        // A 4D Rotation happens on a plane that leaves 2 axes fixed.
+        
+        // Rotate XW Plane
+        let ang = angles.xw;
+        let x = p.x; let w = p.w;
+        p.x = x * Math.cos(ang) - w * Math.sin(ang);
+        p.w = x * Math.sin(ang) + w * Math.cos(ang);
+
+        // Rotate YW Plane
+        ang = angles.yw;
+        let y = p.y; w = p.w;
+        p.y = y * Math.cos(ang) - w * Math.sin(ang);
+        p.w = y * Math.sin(ang) + w * Math.cos(ang);
+        
+        // Rotate ZW Plane
+        ang = angles.zw;
+        let z = p.z; w = p.w;
+        p.z = z * Math.cos(ang) - w * Math.sin(ang);
+        p.w = z * Math.sin(ang) + w * Math.cos(ang);
+
+        // --- 3D ROTATIONS (Mouse Control) ---
+        // Rotate XY
+        ang = angles.xy;
+        x = p.x; y = p.y;
+        p.x = x * Math.cos(ang) - y * Math.sin(ang);
+        p.y = x * Math.sin(ang) + y * Math.cos(ang);
+
+        // Rotate XZ
+        ang = angles.xz;
+        x = p.x; z = p.z;
+        p.x = x * Math.cos(ang) - z * Math.sin(ang);
+        p.z = x * Math.sin(ang) + z * Math.cos(ang);
+
+        // --- 4D -> 3D PROJECTION (Stereographic) ---
+        // We project based on W distance. 
+        // W is "distance" in 4th dimension.
+        // Similar to how Z affects scale in 3D->2D.
+        let distance = 3; // Camera distance from 4D object
+        let wInv = 1 / (distance - p.w);
+        
+        let p3 = {
+            x: p.x * wInv,
+            y: p.y * wInv,
+            z: p.z * wInv,
+            w: p.w // Keep W for coloring
+        };
+
+        // --- 3D -> 2D PROJECTION (Perspective) ---
+        let zInv = 1 / (distance - p3.z);
+        let p2 = {
+            x: p3.x * zInv * scale + cx,
+            y: p3.y * zInv * scale + cy,
+            w: p3.w // Pass W through to 2D for style
+        };
+
+        projected3D.push(p2);
+    }
+
+    // 4. Draw Edges
+    // We use 'lighter' composite op for neon glow effect
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineWidth = 2;
+
+    for (let i = 0; i < edges.length; i++) {
+        let p1 = projected3D[edges[i][0]];
+        let p2 = projected3D[edges[i][1]];
+
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+
+        // COLORING THE 4TH DIMENSION
+        // We use the W coordinate to determine Hue.
+        // W goes from approx -1.5 to 1.5. 
+        // Map W to Hue (0 to 360)
+        // Average W of the edge
+        let avgW = (p1.w + p2.w) / 2;
+        
+        // Normalize W (-2 to 2) -> (0 to 1)
+        let normW = (avgW + 1) / 2;
+        let hue = normW * 360; 
+        
+        // Brightness/Alpha also affected by W (Depth cue)
+        let alpha = 0.3 + (normW * 0.7);
+
+        ctx.strokeStyle = `hsla(${hue}, 100%, 60%, ${alpha})`;
+        ctx.stroke();
+    }
+    
+    // Draw Vertices
+    for(let p of projected3D) {
+        let size = (p.w + 2) * 2;
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, size * 0.5, 0, Math.PI*2);
+        ctx.fill();
+    }
+
+    ctx.globalCompositeOperation = 'source-over';
+    
+    requestAnimationFrame(loop);
+}
+
+// --- MOUSE INPUT ---
+canvas.addEventListener('mousedown', e => {
+    mouse.down = true;
+    mouse.lastX = e.clientX;
+    mouse.lastY = e.clientY;
+    // Disable auto rotation on interaction
+    if (uiAuto.checked) uiAuto.checked = false;
+});
+
+window.addEventListener('mouseup', () => mouse.down = false);
+
+window.addEventListener('mousemove', e => {
+    if (!mouse.down) return;
+    let dx = (e.clientX - mouse.lastX) * 0.01;
+    let dy = (e.clientY - mouse.lastY) * 0.01;
+    
+    angles.xy += dx;
+    angles.xz += dy;
+    
+    mouse.lastX = e.clientX;
+    mouse.lastY = e.clientY;
+});
+
+// Start
+loop();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>THE HIVEMIND: BIO-LATTICE</title>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Courier New', monospace; user-select: none; }
+        canvas { display: block; }
+        #ui {
+            position: absolute; top: 20px; left: 20px;
+            color: #0ff; background: rgba(0,0,0,0.8);
+            padding: 15px; border: 1px solid #0ff;
+            pointer-events: none;
+            box-shadow: 0 0 15px #0ff;
+        }
+        h1 { margin: 0 0 5px 0; font-size: 16px; letter-spacing: 2px; }
+        .stat { font-size: 12px; color: #888; margin-top: 5px; }
+        .active { color: #fff; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <h1>THE HIVEMIND</h1>
+    <div class="stat">NODES: <span id="node-count" class="active">0</span></div>
+    <div class="stat">CONNECTIONS: <span id="link-count" class="active">0</span></div>
+    <div class="stat" style="margin-top:10px;">L-CLICK: INJECT GROWTH</div>
+    <div class="stat">R-CLICK: SEVER LINKS</div>
+</div>
+
+<canvas id="c"></canvas>
+
+<script>
+/**
+ * THE HIVEMIND ENGINE
+ * A robust Simulation of dynamic graph topology.
+ * Uses Verlet Integration for soft-body physics.
+ */
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let width, height;
+let nodes = [];
+let links = [];
+let particles = []; // Data packets traveling the network
+
+// Configuration
+const CONFIG = {
+    maxNodes: 1500,
+    connectDist: 60,
+    forceDist: 40,
+    friction: 0.9,
+    gravity: 0.0,
+    pulseSpeed: 0.1
+};
+
+// Camera
+let cam = { x: 0, y: 0, zoom: 1 };
+let targetCam = { x: 0, y: 0, zoom: 1 };
+let mouse = { x: 0, y: 0, wx: 0, wy: 0, down: false, rightDown: false };
+
+// --- NODE CLASS ---
+class Node {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.lx = x; // Last x (Verlet)
+        this.ly = y; // Last y
+        this.mass = 1 + Math.random();
+        this.energy = 0; // 0 to 1
+        this.connections = []; // Indices of connected nodes
+    }
+
+    update() {
+        // Verlet Integration
+        let vx = (this.x - this.lx) * CONFIG.friction;
+        let vy = (this.y - this.ly) * CONFIG.friction;
+        
+        this.lx = this.x;
+        this.ly = this.y;
+        
+        this.x += vx;
+        this.y += vy;
+        
+        // Energy Decay
+        this.energy *= 0.96;
+    }
+}
+
+// --- INIT ---
+function init() {
+    nodes = [];
+    links = [];
+    particles = [];
+    
+    // Create initial seed ring
+    let count = 20;
+    let r = 100;
+    for(let i=0; i<count; i++) {
+        let theta = (i/count) * Math.PI * 2;
+        let n = new Node(Math.cos(theta)*r, Math.sin(theta)*r);
+        nodes.push(n);
+    }
+    
+    // Connect ring
+    for(let i=0; i<count; i++) {
+        connect(i, (i+1)%count);
+    }
+}
+
+function connect(i, j) {
+    // Avoid duplicates
+    if (nodes[i].connections.includes(j)) return;
+    nodes[i].connections.push(j);
+    nodes[j].connections.push(i);
+    links.push([i, j]);
+}
+
+function disconnect(i, j) {
+    let n1 = nodes[i];
+    let n2 = nodes[j];
+    
+    n1.connections = n1.connections.filter(c => c !== j);
+    n2.connections = n2.connections.filter(c => c !== i);
+    links = links.filter(l => !((l[0]===i && l[1]===j) || (l[0]===j && l[1]===i)));
+}
+
+// --- PHYSICS ENGINE ---
+function step() {
+    // 1. Mouse Interaction
+    // Left Click: Growth / Attraction
+    if (mouse.down) {
+        // Find closest node to spawn off
+        let closest = -1;
+        let minDist = 200;
+        
+        for(let i=0; i<nodes.length; i++) {
+            let d = Math.hypot(nodes[i].x - mouse.wx, nodes[i].y - mouse.wy);
+            if (d < minDist) {
+                minDist = d;
+                closest = i;
+            }
+        }
+
+        // If close enough, pull it
+        if (closest !== -1) {
+            let n = nodes[closest];
+            n.x += (mouse.wx - n.x) * 0.1;
+            n.y += (mouse.wy - n.y) * 0.1;
+            n.energy = 1.0;
+            
+            // Rapid Growth
+            if (Math.random() < 0.2 && nodes.length < CONFIG.maxNodes) {
+                let newNode = new Node(mouse.wx + (Math.random()-0.5)*10, mouse.wy + (Math.random()-0.5)*10);
+                nodes.push(newNode);
+                connect(closest, nodes.length-1);
+                // Triangulate (connect to neighbor of closest)
+                if (nodes[closest].connections.length > 0) {
+                    let neighbor = nodes[closest].connections[0];
+                    if (Math.hypot(nodes[neighbor].x - newNode.x, nodes[neighbor].y - newNode.y) < CONFIG.connectDist) {
+                        connect(nodes.length-1, neighbor);
+                    }
+                }
+            }
+        } else if (nodes.length < 5) {
+             // Restart if empty
+             let n = new Node(mouse.wx, mouse.wy);
+             nodes.push(n);
+        }
+    }
+
+    // Right Click: Cutter
+    if (mouse.rightDown) {
+        // Remove links crossing the mouse or nodes near mouse
+        let range = 50 / cam.zoom;
+        for(let i=links.length-1; i>=0; i--) {
+            let l = links[i];
+            let n1 = nodes[l[0]];
+            let n2 = nodes[l[1]];
+            // Distance from point to segment
+            let d = distToSegment({x: mouse.wx, y:mouse.wy}, n1, n2);
+            if (d < 10 / cam.zoom) {
+                disconnect(l[0], l[1]);
+                // Spark effect
+                for(let k=0; k<5; k++) {
+                    particles.push({
+                        x: mouse.wx, y: mouse.wy,
+                        vx: (Math.random()-0.5)*10, vy: (Math.random()-0.5)*10,
+                        life: 1.0
+                    });
+                }
+            }
+        }
+    }
+
+    // 2. Constraints (Links)
+    for(let i=0; i<links.length; i++) {
+        let idx1 = links[i][0];
+        let idx2 = links[i][1];
+        let n1 = nodes[idx1];
+        let n2 = nodes[idx2];
+        
+        let dx = n2.x - n1.x;
+        let dy = n2.y - n1.y;
+        let dist = Math.sqrt(dx*dx + dy*dy);
+        
+        // Spring
+        let diff = (dist - CONFIG.forceDist) / dist;
+        let offsetX = dx * diff * 0.05; // Stiffness
+        let offsetY = dy * diff * 0.05;
+        
+        n1.x += offsetX;
+        n1.y += offsetY;
+        n2.x -= offsetX;
+        n2.y -= offsetY;
+        
+        // Energy Transfer
+        if (n1.energy > 0.1) n2.energy = Math.max(n2.energy, n1.energy * 0.9);
+        if (n2.energy > 0.1) n1.energy = Math.max(n1.energy, n2.energy * 0.9);
+    }
+
+    // 3. Repulsion (Spatial Hash Optimization simplified for < 1500 nodes)
+    // We just do a naive check for nearby neighbors to keep code single-file clean
+    // but we optimize by only checking a subset or using constraints.
+    // Actually, let's use a simple repulsion loop, it's O(N^2) but fine for 500 nodes on PC.
+    // For 1500, we need to be careful. Let's just repel connected neighbors + randoms? 
+    // No, standard N-body is too slow.
+    // Let's use a "Grid" for repulsion.
+    
+    let grid = {};
+    let cellSize = 60;
+    nodes.forEach(n => {
+        let gx = Math.floor(n.x / cellSize);
+        let gy = Math.floor(n.y / cellSize);
+        let key = gx + ',' + gy;
+        if (!grid[key]) grid[key] = [];
+        grid[key].push(n);
+    });
+
+    nodes.forEach(n => {
+        let gx = Math.floor(n.x / cellSize);
+        let gy = Math.floor(n.y / cellSize);
+        
+        for(let x=-1; x<=1; x++) {
+            for(let y=-1; y<=1; y++) {
+                let key = (gx+x) + ',' + (gy+y);
+                if (grid[key]) {
+                    grid[key].forEach(other => {
+                        if (n === other) return;
+                        let dx = n.x - other.x;
+                        let dy = n.y - other.y;
+                        let distSq = dx*dx + dy*dy;
+                        let minDist = 30;
+                        if (distSq < minDist*minDist && distSq > 0) {
+                            let dist = Math.sqrt(distSq);
+                            let f = (minDist - dist) / minDist;
+                            n.x += (dx/dist) * f * 2.0;
+                            n.y += (dy/dist) * f * 2.0;
+                        }
+                    });
+                }
+            }
+        }
+        n.update();
+    });
+
+    // 4. Update Particles (Sparks)
+    for(let i=particles.length-1; i>=0; i--) {
+        let p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life -= 0.05;
+        if(p.life <= 0) particles.splice(i, 1);
+    }
+
+    // 5. Healing (Auto-connect if close)
+    if (Math.random() < 0.05) {
+        let i = Math.floor(Math.random() * nodes.length);
+        if(nodes[i]) {
+            let n = nodes[i];
+            // Look for close node not connected
+            // Using grid again would be fast, but random search is "organic"
+            let j = Math.floor(Math.random() * nodes.length);
+            if (i !== j && nodes[j]) {
+                let d = Math.hypot(n.x-nodes[j].x, n.y-nodes[j].y);
+                if (d < CONFIG.connectDist * 0.8) {
+                    connect(i, j);
+                }
+            }
+        }
+    }
+}
+
+// --- RENDER ---
+function draw() {
+    // Camera Smoothing
+    cam.x += (targetCam.x - cam.x) * 0.1;
+    cam.y += (targetCam.y - cam.y) * 0.1;
+    cam.zoom += (targetCam.zoom - cam.zoom) * 0.1;
+
+    // Fade background for trails
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.save();
+    // Center Camera
+    ctx.translate(width/2, height/2);
+    ctx.scale(cam.zoom, cam.zoom);
+    ctx.translate(-cam.x, -cam.y);
+
+    // Render Mode: Additive for Neon
+    ctx.globalCompositeOperation = 'lighter';
+
+    // Draw Links
+    ctx.lineWidth = 1.5;
+    
+    // Batch drawing by energy levels to minimize state changes? 
+    // No, just iterate.
+    for(let i=0; i<links.length; i++) {
+        let n1 = nodes[links[i][0]];
+        let n2 = nodes[links[i][1]];
+        
+        let avgEnergy = (n1.energy + n2.energy) * 0.5;
+        
+        ctx.beginPath();
+        ctx.moveTo(n1.x, n1.y);
+        ctx.lineTo(n2.x, n2.y);
+        
+        // Color based on Energy
+        // High energy = White/Cyan. Low = Dark Blue/Purple.
+        let r = Math.floor(20 + avgEnergy * 100);
+        let g = Math.floor(0 + avgEnergy * 255);
+        let b = Math.floor(100 + avgEnergy * 155);
+        let a = 0.2 + avgEnergy * 0.8;
+        
+        ctx.strokeStyle = `rgba(${r},${g},${b},${a})`;
+        ctx.stroke();
+    }
+
+    // Draw Nodes (only high energy ones or large ones)
+    for(let n of nodes) {
+        if (n.energy > 0.1) {
+            ctx.fillStyle = `rgba(200, 255, 255, ${n.energy})`;
+            ctx.beginPath();
+            ctx.arc(n.x, n.y, 2 * n.energy + 1, 0, Math.PI*2);
+            ctx.fill();
+            
+            // Glow
+            if (n.energy > 0.8) {
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = '#0ff';
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+        }
+    }
+
+    // Draw Particles (Sparks)
+    ctx.fillStyle = '#ffaa00';
+    for(let p of particles) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 2, 0, Math.PI*2);
+        ctx.fill();
+    }
+
+    // Draw Cursor
+    if (mouse.down) {
+        ctx.strokeStyle = '#0ff';
+        ctx.beginPath();
+        ctx.arc(mouse.wx, mouse.wy, 20, 0, Math.PI*2);
+        ctx.stroke();
+    }
+    if (mouse.rightDown) {
+        ctx.strokeStyle = '#f00';
+        ctx.beginPath();
+        ctx.moveTo(mouse.wx - 10, mouse.wy - 10);
+        ctx.lineTo(mouse.wx + 10, mouse.wy + 10);
+        ctx.moveTo(mouse.wx + 10, mouse.wy - 10);
+        ctx.lineTo(mouse.wx - 10, mouse.wy + 10);
+        ctx.stroke();
+    }
+
+    ctx.restore();
+    
+    // Stats
+    document.getElementById('node-count').innerText = nodes.length;
+    document.getElementById('link-count').innerText = links.length;
+    
+    requestAnimationFrame(loop);
+}
+
+function loop() {
+    step();
+    draw();
+}
+
+// --- UTILS ---
+function distToSegment(p, v, w) {
+    let l2 = (v.x - w.x)**2 + (v.y - w.y)**2;
+    if (l2 == 0) return Math.hypot(p.x - v.x, p.y - v.y);
+    let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.x - (v.x + t * (w.x - v.x)), p.y - (v.y + t * (w.y - v.y)));
+}
+
+// --- INPUTS ---
+window.addEventListener('resize', () => {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+    if(nodes.length === 0) init();
+});
+
+// Init immediately
+width = window.innerWidth;
+height = window.innerHeight;
+canvas.width = width;
+canvas.height = height;
+init();
+
+window.addEventListener('mousemove', e => {
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+    
+    // World coordinates
+    mouse.wx = (mouse.x - width/2) / cam.zoom + cam.x;
+    mouse.wy = (mouse.y - height/2) / cam.zoom + cam.y;
+});
+window.addEventListener('mousedown', e => {
+    if(e.button === 0) mouse.down = true;
+    if(e.button === 2) mouse.rightDown = true;
+});
+window.addEventListener('mouseup', () => {
+    mouse.down = false;
+    mouse.rightDown = false;
+});
+window.addEventListener('contextmenu', e => e.preventDefault());
+window.addEventListener('wheel', e => {
+    targetCam.zoom -= e.deltaY * 0.001;
+    if(targetCam.zoom < 0.1) targetCam.zoom = 0.1;
+    if(targetCam.zoom > 5) targetCam.zoom = 5;
+});
+
+// Start
+loop();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QUANTUM GARDEN: A Living 4D Ecosystem</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0a0015; overflow: hidden; font-family: 'Consolas', 'Monaco', monospace; color: #fff; }
+        canvas { display: block; position: absolute; top: 0; left: 0; z-index: 0; cursor: crosshair; filter: contrast(1.1) brightness(1.1); }
+        #ui { position: absolute; top: 20px; left: 20px; z-index: 10; background: rgba(10, 0, 30, 0.85); backdrop-filter: blur(10px); border: 1px solid rgba(120, 80, 255, 0.3); border-radius: 12px; padding: 20px; width: 320px; box-shadow: 0 8px 32px rgba(120, 80, 255, 0.2); pointer-events: auto; }
+        h1 { margin: 0 0 15px 0; font-size: 18px; font-weight: 700; background: linear-gradient(90deg, #a855f7, #ec4899, #f59e0b); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; text-transform: uppercase; letter-spacing: 2px; }
+        .stat { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px; color: #999; }
+        .stat .val { color: #fff; font-weight: bold; font-family: 'Courier New', monospace; }
+        .control { margin: 15px 0; padding-top: 15px; border-top: 1px solid rgba(255, 255, 255, 0.1); }
+        .control label { display: block; font-size: 11px; margin-bottom: 6px; color: #a855f7; text-transform: uppercase; letter-spacing: 1px; }
+        input[type=range] { width: 100%; height: 4px; background: rgba(255, 255, 255, 0.1); border-radius: 2px; outline: none; appearance: none; }
+        input[type=range]::-webkit-slider-thumb { appearance: none; width: 14px; height: 14px; background: linear-gradient(135deg, #a855f7, #ec4899); border-radius: 50%; cursor: pointer; box-shadow: 0 0 10px rgba(168, 85, 247, 0.5); }
+        .btn { width: 100%; padding: 10px; margin-top: 10px; background: rgba(168, 85, 247, 0.1); border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 6px; color: #a855f7; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; cursor: pointer; transition: all 0.3s ease; }
+        .btn:hover { background: rgba(168, 85, 247, 0.2); border-color: #a855f7; box-shadow: 0 0 20px rgba(168, 85, 247, 0.3); }
+        #info { position: absolute; bottom: 20px; left: 20px; right: 20px; z-index: 5; text-align: center; font-size: 11px; color: rgba(255, 255, 255, 0.3); pointer-events: none; }
+        .mode { display: inline-block; padding: 4px 12px; margin: 3px; background: rgba(168, 85, 247, 0.1); border-radius: 12px; border: 1px solid rgba(168, 85, 247, 0.2); }
+    </style>
+</head>
+
+<body>
+
+    <div id="ui">
+        <h1>⚛️ Quantum Garden</h1>
+        <div class="stat"><span>Organisms:</span><span class="val" id="orgCount">0</span></div>
+        <div class="stat"><span>Generation:</span><span class="val" id="genCount">1</span></div>
+        <div class="stat"><span>Energy:</span><span class="val" id="energyCount">0</span></div>
+        <div class="stat"><span>4D Phase:</span><span class="val" id="phaseVal">0.00</span></div>
+
+        <div class="control">
+            <label>Mutation Rate: <span id="mutVal">10%</span></label>
+            <input type="range" id="mutRate" min="1" max="50" value="10">
+        </div>
+
+        <div class="control">
+            <label>Time Scale: <span id="speedVal">1x</span></label>
+            <input type="range" id="speed" min="1" max="10" value="1">
+        </div>
+
+        <div class="control">
+            <label>Dimension Intensity: <span id="dimVal">50%</span></label>
+            <input type="range" id="dimIntensity" min="0" max="100" value="50">
+        </div>
+
+        <button class="btn" id="spawnBtn">🌱 Spawn Life</button>
+        <button class="btn" id="energyBtn">✨ Add Energy</button>
+        <button class="btn" id="resetBtn">🔄 New Universe</button>
+    </div>
+
+    <div id="info">
+        <span class="mode">CLICK: Spawn Organism</span>
+        <span class="mode">DRAG: Create Energy Fields</span>
+        <span class="mode">WATCH: Evolution in 4D</span>
+    </div>
+
+    <canvas id="c"></canvas>
+
+    <script>
+        const canvas = document.getElementById('c');
+        const ctx = canvas.getContext('2d');
+        let W, H;
+
+        const CFG = {
+            maxOrgs: 120,
+            maxEnergy: 300,
+            mutationRate: 0.1,
+            dimension4D: 0,
+            reproThreshold: 150,
+            energyCost: 0.15,
+            camDist: 3
+        };
+
+        class Vec4 {
+            constructor(x = 0, y = 0, z = 0, w = 0) {
+                this.x = x; this.y = y; this.z = z; this.w = w;
+            }
+
+            static rotate4D(v, angle, plane = 'xw') {
+                let s = Math.sin(angle);
+                let c = Math.cos(angle);
+                let { x, y, z, w } = v;
+                switch (plane) {
+                    case 'xw': return new Vec4(x * c - w * s, y, z, x * s + w * c);
+                    case 'yw': return new Vec4(x, y * c - w * s, z, y * s + w * c);
+                    default: return v;
+                }
+            }
+
+            static project(v) {
+                // Safety Clip: Prevents division by zero crashes
+                let wDenom = Math.max(0.1, CFG.camDist - v.w);
+                let wInv = 1 / wDenom;
+                let x3 = v.x * wInv, y3 = v.y * wInv, z3 = v.z * wInv;
+                
+                let zDenom = Math.max(0.1, CFG.camDist - z3);
+                let zInv = 1 / zDenom;
+                return { x: x3 * zInv, y: y3 * zInv, depth: z3, w: v.w };
+            }
+        }
+
+        class Brain {
+            constructor(inputs, hidden, outputs) {
+                this.i = inputs; this.h = hidden; this.o = outputs;
+                this.wih = Array(inputs * hidden).fill(0).map(() => Math.random() * 2 - 1);
+                this.who = Array(hidden * outputs).fill(0).map(() => Math.random() * 2 - 1);
+            }
+            think(sensors) {
+                let h = new Array(this.h);
+                for (let i = 0; i < this.h; i++) {
+                    let sum = 0;
+                    for (let j = 0; j < this.i; j++) sum += sensors[j] * this.wih[i * this.i + j];
+                    h[i] = Math.tanh(sum);
+                }
+                let o = new Array(this.o);
+                for (let i = 0; i < this.o; i++) {
+                    let sum = 0;
+                    for (let j = 0; j < this.h; j++) sum += h[j] * this.who[i * this.h + j];
+                    o[i] = Math.tanh(sum);
+                }
+                return o;
+            }
+            mutate(rate) {
+                const mut = v => Math.random() < rate ? v + (Math.random() * 2 - 1) * 0.5 : v;
+                this.wih = this.wih.map(mut);
+                this.who = this.who.map(mut);
+            }
+            clone() {
+                let b = new Brain(this.i, this.h, this.o);
+                b.wih = [...this.wih]; b.who = [...this.who];
+                return b;
+            }
+        }
+
+        class Organism {
+            constructor(x, y, parent = null) {
+                this.pos = new Vec4(x, y, Math.random() * 2 - 1, Math.random() * 2 - 1);
+                this.vel = new Vec4(0, 0, 0, 0);
+                this.energy = parent ? 60 : 100;
+                this.age = 0;
+                this.gen = parent ? parent.gen + 1 : 1;
+                this.hue = parent ? parent.hue + Math.random() * 20 - 10 : Math.random() * 360;
+                this.size = 5 + Math.random() * 3;
+                this.brain = parent ? parent.brain.clone() : new Brain(6, 10, 4);
+                if (parent) this.brain.mutate(CFG.mutationRate);
+                this.sensors = [0, 0, 0, 0, 0, 0];
+                this.dead = false;
+            }
+
+            update(orgs, energy) {
+                if (this.dead) return null;
+                
+                // Sensing logic
+                let nearest = null, minDist = Infinity;
+                for (let o of orgs) {
+                    if (o === this || o.dead) continue;
+                    let d = Math.hypot(this.pos.x - o.pos.x, this.pos.y - o.pos.y);
+                    if (d < minDist) { minDist = d; nearest = o; }
+                }
+                if (nearest && minDist < 200) {
+                    this.sensors[0] = (nearest.pos.x - this.pos.x) / minDist;
+                    this.sensors[1] = (nearest.pos.y - this.pos.y) / minDist;
+                } else { this.sensors[0] = 0; this.sensors[1] = 0; }
+
+                let nearE = null, minE = Infinity;
+                for (let e of energy) {
+                    let d = Math.hypot(this.pos.x - e.x, this.pos.y - e.y);
+                    if (d < minE) { minE = d; nearE = e; }
+                }
+                if (nearE && minE < 150) {
+                    this.sensors[2] = (nearE.x - this.pos.x) / minE;
+                    this.sensors[3] = (nearE.y - this.pos.y) / minE;
+                } else { this.sensors[2] = 0; this.sensors[3] = 0; }
+
+                this.sensors[4] = Math.sin(CFG.dimension4D + this.pos.w);
+                this.sensors[5] = Math.cos(CFG.dimension4D + this.pos.w);
+
+                let out = this.brain.think(this.sensors);
+                this.vel.x += out[0] * 0.3; this.vel.y += out[1] * 0.3;
+                this.vel.z += out[2] * 0.1; this.vel.w += out[3] * 0.1;
+                this.vel.x *= 0.95; this.vel.y *= 0.95;
+                this.pos.x += this.vel.x; this.pos.y += this.vel.y;
+                this.pos.z += this.vel.z; this.pos.w += this.vel.w;
+
+                if (this.pos.x < 0) this.pos.x = W; if (this.pos.x > W) this.pos.x = 0;
+                if (this.pos.y < 0) this.pos.y = H; if (this.pos.y > H) this.pos.y = 0;
+
+                this.energy -= CFG.energyCost;
+                this.age++;
+
+                for (let i = energy.length - 1; i >= 0; i--) {
+                    if (Math.hypot(this.pos.x - energy[i].x, this.pos.y - energy[i].y) < 20) {
+                        this.energy += energy[i].val;
+                        energy.splice(i, 1);
+                    }
+                }
+
+                if (this.energy <= 0) { this.dead = true; return null; }
+                if (this.energy > CFG.reproThreshold && orgs.length < CFG.maxOrgs) {
+                    this.energy *= 0.5;
+                    return new Organism(this.pos.x, this.pos.y, this);
+                }
+                return null;
+            }
+
+            draw(ctx, dimIntensity, allOrgs) {
+                let rot = Vec4.rotate4D(this.pos, CFG.dimension4D, 'xw');
+                rot = Vec4.rotate4D(rot, CFG.dimension4D * 0.7, 'yw');
+                let proj = Vec4.project(rot);
+
+                let scale = 200;
+                let x = proj.x * scale + W / 2;
+                let y = proj.y * scale + H / 2;
+                let radius = Math.min(500, Math.abs(this.size * (1 + proj.depth * 0.3)));
+                
+                let alpha = 0.3 + (Math.min(this.energy, 150) / 150) * 0.7;
+                let wHue = ((proj.w + 2) / 4) * 60 * (dimIntensity / 100);
+                let hue = (this.hue + wHue) % 360;
+
+                // Chromatic Aberration Effect
+                let shift = Math.abs(proj.depth) * 5;
+                ctx.globalCompositeOperation = "screen";
+                
+                // Red Channel
+                ctx.fillStyle = `hsla(${hue}, 100%, 50%, ${alpha})`;
+                ctx.beginPath(); ctx.arc(x - shift, y, radius, 0, Math.PI * 2); ctx.fill();
+                
+                // Blue Channel
+                ctx.fillStyle = `hsla(${(hue + 180) % 360}, 100%, 50%, ${alpha})`;
+                ctx.beginPath(); ctx.arc(x + shift, y, radius, 0, Math.PI * 2); ctx.fill();
+                
+                ctx.globalCompositeOperation = "source-over";
+
+                // Connection lines
+                for (let o of allOrgs) {
+                    if (o === this || o.dead) continue;
+                    let d = Math.hypot(this.pos.x - o.pos.x, this.pos.y - o.pos.y);
+                    if (d < 70) {
+                        let oR = Vec4.rotate4D(o.pos, CFG.dimension4D, 'xw');
+                        let oP = Vec4.project(Vec4.rotate4D(oR, CFG.dimension4D * 0.7, 'yw'));
+                        ctx.strokeStyle = `hsla(${hue}, 80%, 60%, ${0.1 * (1 - d / 70)})`;
+                        ctx.lineWidth = 0.5;
+                        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(oP.x * scale + W / 2, oP.y * scale + H / 2); ctx.stroke();
+                    }
+                }
+            }
+        }
+
+        class Energy {
+            constructor(x, y) { this.x = x; this.y = y; this.val = 30; this.age = 0; }
+            draw(ctx) {
+                this.age++;
+                let pulse = Math.sin(this.age * 0.1) * 0.3 + 0.7;
+                ctx.fillStyle = `hsla(180, 100%, 70%, ${0.5 * pulse})`;
+                ctx.beginPath(); ctx.arc(this.x, this.y, 6 * pulse, 0, Math.PI * 2); ctx.fill();
+            }
+        }
+
+        let organisms = [], energyGlobes = [], generation = 1, frame = 0;
+        function resize() { W = window.innerWidth; H = window.innerHeight; canvas.width = W; canvas.height = H; }
+        window.addEventListener('resize', resize); resize();
+
+        for (let i = 0; i < 20; i++) organisms.push(new Organism(Math.random() * W, Math.random() * H));
+        
+        canvas.addEventListener('mousedown', () => canvas.isDown = true);
+        window.addEventListener('mouseup', () => canvas.isDown = false);
+        canvas.addEventListener('mousemove', e => { if (canvas.isDown) energyGlobes.push(new Energy(e.clientX, e.clientY)); });
+        canvas.addEventListener('click', e => { if (organisms.length < CFG.maxOrgs) organisms.push(new Organism(e.clientX, e.clientY)); });
+
+        document.getElementById('spawnBtn').onclick = () => { for(let i=0; i<5; i++) organisms.push(new Organism(Math.random()*W, Math.random()*H)); };
+        document.getElementById('energyBtn').onclick = () => { for(let i=0; i<20; i++) energyGlobes.push(new Energy(Math.random()*W, Math.random()*H)); };
+        document.getElementById('resetBtn').onclick = () => { organisms = []; energyGlobes = []; generation = 1; };
+
+        function loop() {
+            let speed = parseInt(document.getElementById('speed').value);
+            let dimInt = parseInt(document.getElementById('dimIntensity').value);
+
+            for (let s = 0; s < speed; s++) {
+                frame++; CFG.dimension4D += 0.005;
+                let newOrgs = [];
+                for (let o of organisms) { let c = o.update(organisms, energyGlobes); if (c) newOrgs.push(c); }
+                organisms = organisms.filter(o => !o.dead);
+                organisms.push(...newOrgs);
+                if (frame % 40 === 0 && energyGlobes.length < CFG.maxEnergy) energyGlobes.push(new Energy(Math.random() * W, Math.random() * H));
+                for (let o of organisms) if (o.gen > generation) generation = o.gen;
+            }
+
+            ctx.fillStyle = 'rgba(10, 0, 20, 0.2)';
+            ctx.fillRect(0, 0, W, H);
+            for (let e of energyGlobes) e.draw(ctx);
+            for (let o of organisms) o.draw(ctx, dimInt, organisms);
+
+            document.getElementById('orgCount').innerText = organisms.length;
+            document.getElementById('genCount').innerText = generation;
+            document.getElementById('energyCount').innerText = energyGlobes.length;
+            document.getElementById('phaseVal').innerText = (CFG.dimension4D % (Math.PI * 2)).toFixed(2);
+            requestAnimationFrame(loop);
+        }
+        loop();
+    </script>
+</body>
+</html>

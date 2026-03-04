@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NEURO-EVOLUTION: SERPENT CIRCUIT (FIXED)</title>
+    <style>
+        body { margin: 0; background: #111; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
+        canvas { display: block; }
+        
+        #ui {
+            position: absolute; top: 15px; left: 15px;
+            width: 300px;
+            background: rgba(10, 10, 10, 0.9);
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            color: #ccc;
+            user-select: none;
+            box-shadow: 0 0 30px rgba(0,0,0,0.8);
+        }
+
+        .stat-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12px; }
+        .val { color: #fff; font-weight: bold; font-family: monospace; }
+        .gold { color: #fec; text-shadow: 0 0 10px #fb0; }
+        .cyan { color: #0ff; text-shadow: 0 0 10px #0ff; }
+
+        h1 { margin: 0 0 15px 0; font-size: 14px; text-transform: uppercase; letter-spacing: 3px; color: #666; border-bottom: 1px solid #333; padding-bottom: 10px; }
+
+        input[type=range] { width: 100%; margin: 5px 0 15px 0; accent-color: #fb0; cursor: pointer; height: 3px; background: #333; }
+        
+        button {
+            width: 100%; padding: 12px; background: #222; border: 1px solid #444; color: #eee;
+            border-radius: 4px; cursor: pointer; font-size: 11px; text-transform: uppercase; font-weight: bold;
+            transition: all 0.2s; margin-top: 5px;
+        }
+        button:hover { background: #fb0; color: #000; border-color: #fb0; box-shadow: 0 0 15px rgba(255, 187, 0, 0.3); }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <h1>Serpent Engine</h1>
+    <div class="stat-row"><span>Generation</span> <span id="gen" class="val">1</span></div>
+    <div class="stat-row"><span>Alive</span> <span id="alive" class="val">0</span></div>
+    <div class="stat-row"><span>Fastest Speed</span> <span id="best-speed" class="val cyan">0</span></div>
+    <div class="stat-row"><span>Best Distance</span> <span id="dist" class="val gold">0</span></div>
+
+    <div style="margin-top:15px; font-size:10px; color:#666; text-transform:uppercase;">Simulation Speed</div>
+    <input type="range" id="speed" min="1" max="20" value="1">
+
+    <div style="font-size:10px; color:#666; text-transform:uppercase;">Mutation Variance</div>
+    <input type="range" id="mutation" min="1" max="50" value="5">
+
+    <button onclick="sim.generateTrack()">Reseed Track</button>
+</div>
+
+<canvas id="c"></canvas>
+
+<script>
+// --- MATH UTILS ---
+const Vec2 = {
+    add: (a, b) => ({x: a.x + b.x, y: a.y + b.y}),
+    sub: (a, b) => ({x: a.x - b.x, y: a.y - b.y}),
+    mul: (a, s) => ({x: a.x * s, y: a.y * s}),
+    len: (a) => Math.hypot(a.x, a.y),
+    norm: (a) => { let l = Math.hypot(a.x, a.y); return l===0 ? {x:0,y:0} : {x: a.x/l, y: a.y/l}; },
+    rot90: (a) => ({x: -a.y, y: a.x}),
+    dist: (a, b) => Math.hypot(a.x - b.x, a.y - b.y),
+    lerp: (a, b, t) => ({x: a.x + (b.x-a.x)*t, y: a.y + (b.y-a.y)*t})
+};
+
+// Calculates shortest distance from point p to line segment v-w
+function distToSegment(p, v, w) {
+    const l2 = (v.x - w.x)**2 + (v.y - w.y)**2;
+    if (l2 == 0) return Math.hypot(p.x - v.x, p.y - v.y);
+    let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.x - (v.x + t * (w.x - v.x)), p.y - (v.y + t * (w.y - v.y)));
+}
+
+// Catmull-Rom for smoothing
+function getSplinePoint(p0, p1, p2, p3, t) {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let f1 = -0.5 * t3 + t2 - 0.5 * t;
+    let f2 = 1.5 * t3 - 2.5 * t2 + 1.0;
+    let f3 = -1.5 * t3 + 2.0 * t2 + 0.5 * t;
+    let f4 = 0.5 * t3 - 0.5 * t2;
+    return {
+        x: p0.x * f1 + p1.x * f2 + p2.x * f3 + p3.x * f4,
+        y: p0.y * f1 + p1.y * f2 + p2.y * f3 + p3.y * f4
+    };
+}
+
+// --- TRACK GENERATOR ---
+class Track {
+    constructor() {
+        this.width = 50; 
+        this.checkpoints = [];
+        this.innerWalls = [];
+        this.outerWalls = [];
+        this.startPos = {x:0, y:0, angle:0};
+    }
+
+    generate() {
+        this.checkpoints = [];
+        this.innerWalls = [];
+        this.outerWalls = [];
+
+        // 1. Generate "Snake" Nodes
+        let nodes = [];
+        const cx = window.innerWidth / 2;
+        const cy = window.innerHeight / 2;
+        const baseR = Math.min(cx, cy) * 0.5;
+        
+        const freq1 = Math.floor(Math.random() * 3 + 2); 
+        const freq2 = Math.floor(Math.random() * 6 + 4); 
+        const amp1 = baseR * 0.4;
+        const amp2 = baseR * 0.15;
+        
+        const steps = 40; 
+        for(let i=0; i<steps; i++) {
+            let theta = (i / steps) * Math.PI * 2;
+            let r = baseR + Math.sin(theta * freq1) * amp1 + Math.cos(theta * freq2) * amp2;
+            let x = cx + Math.cos(theta) * r;
+            let y = cy + Math.sin(theta) * r;
+            x = Math.max(50, Math.min(window.innerWidth-50, x));
+            y = Math.max(50, Math.min(window.innerHeight-50, y));
+            nodes.push({x, y});
+        }
+
+        // 2. Smooth Spline Interpolation
+        const resolution = 15; 
+        for(let i=0; i<nodes.length; i++) {
+            let p0 = nodes[(i - 1 + nodes.length) % nodes.length];
+            let p1 = nodes[i];
+            let p2 = nodes[(i + 1) % nodes.length];
+            let p3 = nodes[(i + 2) % nodes.length];
+
+            for(let j=0; j<resolution; j++) {
+                let t = j / resolution;
+                let mid = getSplinePoint(p0, p1, p2, p3, t);
+                
+                let t_next = (j+1)/resolution;
+                let next_mid = getSplinePoint(p0, p1, p2, p3, t_next);
+                let tangent = Vec2.sub(next_mid, mid);
+                let normal = Vec2.norm(Vec2.rot90(tangent));
+
+                let inner = Vec2.add(mid, Vec2.mul(normal, this.width/2));
+                let outer = Vec2.sub(mid, Vec2.mul(normal, this.width/2));
+                
+                this.checkpoints.push({mid, inner, outer});
+            }
+        }
+
+        // 3. Build Wall Segments
+        for(let i=0; i<this.checkpoints.length; i++) {
+            let curr = this.checkpoints[i];
+            let next = this.checkpoints[(i+1) % this.checkpoints.length];
+            this.innerWalls.push({a: curr.inner, b: next.inner});
+            this.outerWalls.push({a: curr.outer, b: next.outer});
+        }
+
+        // 4. Set Start
+        let s = this.checkpoints[0];
+        let sNext = this.checkpoints[5]; 
+        let dir = Vec2.sub(sNext.mid, s.mid);
+        this.startPos = { x: s.mid.x, y: s.mid.y, angle: Math.atan2(dir.y, dir.x) };
+    }
+
+    draw(ctx) {
+        ctx.fillStyle = "#111";
+        ctx.beginPath();
+        ctx.moveTo(this.checkpoints[0].outer.x, this.checkpoints[0].outer.y);
+        for(let p of this.checkpoints) ctx.lineTo(p.outer.x, p.outer.y);
+        ctx.closePath();
+        
+        ctx.moveTo(this.checkpoints[0].inner.x, this.checkpoints[0].inner.y);
+        for(let i=this.checkpoints.length-1; i>=0; i--) ctx.lineTo(this.checkpoints[i].inner.x, this.checkpoints[i].inner.y);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#00ffcc";
+        ctx.stroke();
+
+        // Checkpoints (Debug)
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for(let p of this.checkpoints) {
+            ctx.moveTo(p.inner.x, p.inner.y);
+            ctx.lineTo(p.outer.x, p.outer.y);
+        }
+        ctx.stroke();
+
+        // Start Line
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 4;
+        let start = this.checkpoints[0];
+        ctx.beginPath();
+        ctx.moveTo(start.inner.x, start.inner.y);
+        ctx.lineTo(start.outer.x, start.outer.y);
+        ctx.stroke();
+    }
+}
+
+// --- NEURAL NETWORK ---
+class Brain {
+    constructor(input, hidden, output) {
+        this.input=input; this.hidden=hidden; this.output=output;
+        this.w1 = new Float32Array(hidden*input).map(()=>Math.random()*2-1);
+        this.w2 = new Float32Array(output*hidden).map(()=>Math.random()*2-1);
+        this.b1 = new Float32Array(hidden).map(()=>Math.random()*2-1);
+        this.b2 = new Float32Array(output).map(()=>Math.random()*2-1);
+    }
+    compute(inArr) {
+        let h = new Float32Array(this.hidden);
+        for(let i=0; i<this.hidden; i++) {
+            let s = this.b1[i];
+            for(let j=0; j<this.input; j++) s += inArr[j]*this.w1[i*this.input+j];
+            h[i] = Math.tanh(s);
+        }
+        let o = new Float32Array(this.output);
+        for(let i=0; i<this.output; i++) {
+            let s = this.b2[i];
+            for(let j=0; j<this.hidden; j++) s += h[j]*this.w2[i*this.hidden+j];
+            o[i] = Math.tanh(s);
+        }
+        return o;
+    }
+    clone() {
+        let b = new Brain(this.input, this.hidden, this.output);
+        b.w1.set(this.w1); b.w2.set(this.w2); b.b1.set(this.b1); b.b2.set(this.b2);
+        return b;
+    }
+    mutate(rate) {
+        const m = (x) => Math.random()<rate ? x+(Math.random()*0.5-0.25) : x;
+        this.w1 = this.w1.map(m); this.w2 = this.w2.map(m);
+        this.b1 = this.b1.map(m); this.b2 = this.b2.map(m);
+    }
+}
+
+// --- CAR AGENT (UPDATED WITH PHYSICS) ---
+class Car {
+    constructor(brain, track) {
+        this.track = track;
+        this.pos = { ...track.startPos };
+        this.angle = track.startPos.angle;
+        this.vel = 0;
+        
+        // 7 Eyes: Wide FOV
+        this.sensors = [-1.4, -0.8, -0.4, 0, 0.4, 0.8, 1.4]; 
+        this.brain = brain || new Brain(7, 12, 2);
+        
+        this.dead = false;
+        this.fitness = 0;
+        this.gateIndex = 0;
+        this.laps = 0;
+        this.frames = 0;
+        this.fuel = 200; 
+        
+        this.isGhost = false;
+        this.isChamp = false;
+        this.history = [];
+    }
+
+    update() {
+        if(this.dead) return;
+        this.frames++;
+        this.fuel--;
+        
+        if(!this.isGhost && this.frames % 3 === 0) {
+            this.history.push({x: this.pos.x, y: this.pos.y, a: this.angle});
+        }
+        
+        if(this.fuel <= 0) { this.dead = true; return; }
+        
+        if(this.isGhost) {
+            if(this.history.length > 0) {
+                let f = this.history.shift();
+                this.pos.x = f.x; this.pos.y = f.y; this.angle = f.a;
+            } else { this.dead = true; }
+            return;
+        }
+
+        // --- 1. PREPARE WALLS (Lookahead optimization) ---
+        let inputs = [];
+        let range = 180;
+        let wallsToCheck = [];
+        
+        // Increased lookahead to prevent driving blind into corners
+        let lookAhead = 40; 
+        for(let i=0; i<lookAhead; i++) {
+            let idx = (this.gateIndex + i) % this.track.innerWalls.length;
+            wallsToCheck.push(this.track.innerWalls[idx]);
+            wallsToCheck.push(this.track.outerWalls[idx]);
+        }
+
+        // --- 2. SENSORS (Raycasting) ---
+        for(let s of this.sensors) {
+            let a = this.angle + s;
+            let p2 = {x: this.pos.x + Math.cos(a)*range, y: this.pos.y + Math.sin(a)*range};
+            let closest = 1.0;
+            
+            for(let w of wallsToCheck) {
+                let t = this.intersect(this.pos, p2, w.a, w.b);
+                if (t !== null && t < closest) closest = t;
+            }
+            inputs.push(1.0 - closest);
+        }
+
+        // --- 3. PHYSICAL COLLISION CHECK ---
+        // If car body touches wall, die immediately (fixes clipping)
+        let carRadius = 6; 
+        for(let w of wallsToCheck) {
+            if(distToSegment(this.pos, w.a, w.b) < carRadius) {
+                this.dead = true;
+                return;
+            }
+        }
+
+        // --- 4. CONTROL ---
+        let out = this.brain.compute(inputs);
+        let steer = out[0] * 0.15;
+        let throttle = (out[1] + 1) * 0.5; // 0 to 1
+        let maxSpeed = 7.0;
+        
+        this.angle += steer;
+        this.vel += throttle * 0.5;
+        this.vel *= 0.92; // Friction
+        if(this.vel > maxSpeed) this.vel = maxSpeed;
+        
+        this.pos.x += Math.cos(this.angle) * this.vel;
+        this.pos.y += Math.sin(this.angle) * this.vel;
+
+        // --- 5. CHECKPOINTS ---
+        let nextGateIdx = (this.gateIndex + 1) % this.track.checkpoints.length;
+        let gate = this.track.checkpoints[nextGateIdx];
+        let distToGate = Vec2.dist(this.pos, gate.mid);
+        
+        if (distToGate < this.track.width) {
+            this.gateIndex = nextGateIdx;
+            this.fuel += 50; 
+            if(this.gateIndex === 0) this.laps++;
+        }
+
+        // FAILSAFE: If car glitches through wall and wanders off, kill it
+        if(distToGate > this.track.width * 4) {
+            this.dead = true;
+        }
+        
+        this.fitness = (this.laps * this.track.checkpoints.length) + this.gateIndex;
+        this.fitness += (1.0 - (this.frames / 10000)); 
+    }
+
+    intersect(p1, p2, p3, p4) {
+        const den = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x);
+        if (den == 0) return null;
+        const t = ((p1.x - p3.x) * (p3.y - p4.y) - (p1.y - p3.y) * (p3.x - p4.x)) / den;
+        const u = -((p1.x - p2.x) * (p1.y - p3.y) - (p1.y - p2.y) * (p1.x - p3.x)) / den;
+        if (t > 0 && t < 1 && u > 0 && u < 1) return t;
+        return null;
+    }
+
+    draw(ctx) {
+        ctx.save();
+        ctx.translate(this.pos.x, this.pos.y);
+        ctx.rotate(this.angle);
+
+        if (this.isGhost) {
+            ctx.fillStyle = "rgba(0, 255, 255, 0.3)";
+            ctx.fillRect(-6, -3, 12, 6);
+        } else if (this.isChamp) {
+            ctx.fillStyle = "#fb0";
+            ctx.shadowBlur = 15; ctx.shadowColor = "#fb0";
+            ctx.fillRect(-6, -3, 12, 6);
+        } else {
+            ctx.fillStyle = this.dead ? "#333" : "rgba(255, 255, 255, 0.4)";
+            ctx.fillRect(-5, -3, 10, 6);
+        }
+        
+        ctx.restore();
+    }
+}
+
+// --- SIMULATION ---
+class Simulation {
+    constructor() {
+        this.canvas = document.getElementById('c');
+        this.ctx = this.canvas.getContext('2d');
+        this.resize();
+        window.onresize = () => this.resize();
+
+        this.track = new Track();
+        this.population = [];
+        this.popSize = 300;
+        this.gen = 1;
+        this.ghostHistory = [];
+        this.bestDist = 0;
+
+        this.generateTrack();
+        this.loop();
+    }
+
+    resize() {
+        this.canvas.width = window.innerWidth;
+        this.canvas.height = window.innerHeight;
+    }
+
+    generateTrack() {
+        this.track.generate();
+        this.ghostHistory = [];
+        this.bestDist = 0;
+        this.gen = 1;
+        document.getElementById('gen').innerText = 1;
+        document.getElementById('dist').innerText = 0;
+        this.initPop();
+    }
+
+    initPop() {
+        this.population = [];
+        if(this.ghostHistory.length > 0) {
+            let g = new Car(null, this.track);
+            g.isGhost = true;
+            g.history = JSON.parse(JSON.stringify(this.ghostHistory));
+            this.population.push(g);
+        }
+        for(let i=0; i<this.popSize; i++) this.population.push(new Car(null, this.track));
+    }
+
+    nextGen() {
+        let racers = this.population.filter(c => !c.isGhost);
+        racers.sort((a,b) => b.fitness - a.fitness);
+        let best = racers[0];
+
+        if(best.fitness > this.bestDist) {
+            this.bestDist = best.fitness;
+            this.ghostHistory = JSON.parse(JSON.stringify(best.history));
+            document.getElementById('dist').innerText = Math.floor(this.bestDist);
+        }
+
+        let newPop = [];
+        
+        // 1. Ghost
+        if(this.ghostHistory.length > 0) {
+            let g = new Car(null, this.track);
+            g.isGhost = true;
+            g.history = JSON.parse(JSON.stringify(this.ghostHistory));
+            newPop.push(g);
+        }
+        
+        // 2. Champ
+        let champ = new Car(best.brain.clone(), this.track);
+        champ.isChamp = true;
+        newPop.push(champ);
+
+        // 3. Mutated Children
+        let mutRate = document.getElementById('mutation').value / 500;
+        while(newPop.length < this.popSize + (this.ghostHistory.length?1:0)) {
+            let p = racers[Math.floor(Math.random()*(racers.length*0.2))]; 
+            let c = new Car(p.brain.clone(), this.track);
+            c.brain.mutate(mutRate);
+            newPop.push(c);
+        }
+        
+        this.population = newPop;
+        this.gen++;
+        document.getElementById('gen').innerText = this.gen;
+    }
+
+    loop() {
+        let speed = parseInt(document.getElementById('speed').value);
+        for(let s=0; s<speed; s++) {
+            let active = 0;
+            let maxVel = 0;
+            for(let c of this.population) {
+                c.update();
+                if(!c.dead && !c.isGhost) {
+                    active++;
+                    if(c.vel > maxVel) maxVel = c.vel;
+                }
+            }
+            if(active === 0) { this.nextGen(); break; }
+            document.getElementById('alive').innerText = active;
+            document.getElementById('best-speed').innerText = maxVel.toFixed(1);
+        }
+
+        this.ctx.fillStyle = "#050505";
+        this.ctx.fillRect(0,0,this.canvas.width, this.canvas.height);
+        
+        this.track.draw(this.ctx);
+        for(let c of this.population) c.draw(this.ctx);
+        
+        requestAnimationFrame(()=>this.loop());
+    }
+}
+
+const sim = new Simulation();
+
+</script>
+</body>
+</html>

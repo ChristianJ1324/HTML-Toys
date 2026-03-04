@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Procedural IK Creature</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #050505;
+            font-family: 'Consolas', monospace;
+        }
+        canvas { display: block; }
+
+        #ui {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0, 20, 40, 0.8);
+            border: 1px solid #00ff88;
+            padding: 15px 30px;
+            border-radius: 20px;
+            color: #00ff88;
+            text-align: center;
+            pointer-events: none;
+            box-shadow: 0 0 20px rgba(0, 255, 136, 0.2);
+        }
+        h2 { margin: 0; font-size: 16px; letter-spacing: 2px; }
+        small { color: #0088aa; }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <h2>THE VOID CRAWLER</h2>
+        <small>Move mouse to lead the creature</small>
+    </div>
+    
+    <canvas id="c"></canvas>
+
+<script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let width, height;
+
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // --- CONFIG ---
+    const LEG_COUNT = 6;
+    const SEGMENT_LEN = 60;
+    const BODY_RADIUS = 30;
+    const SPEED = 0.08; // Lerp speed
+    const STEP_HEIGHT = 20;
+    const STEP_SPEED = 0.15;
+
+    // --- MATH HELPERS ---
+    // Simple 2-Bone Inverse Kinematics Solver
+    // Returns the elbow position given start(shoulder), end(target), and lengths
+    function solveIK(x, y, tx, ty, len1, len2, flip) {
+        const dx = tx - x;
+        const dy = ty - y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        
+        // Clamp distance so we don't snap if target is out of reach
+        const d = Math.min(dist, len1 + len2 - 0.1);
+        
+        const a = (len1*len1 - len2*len2 + d*d) / (2*d);
+        const h = Math.sqrt(Math.max(0, len1*len1 - a*a));
+        
+        const x2 = x + a * (dx/d);
+        const y2 = y + a * (dy/d);
+        
+        // Elbow position
+        const ex = x2 + h * (dy/d) * (flip ? 1 : -1);
+        const ey = y2 - h * (dx/d) * (flip ? 1 : -1);
+        
+        return { x: ex, y: ey };
+    }
+
+    // --- CLASSES ---
+
+    class Leg {
+        constructor(id, offsetX, offsetY) {
+            this.id = id;
+            this.offsetX = offsetX; // Where it attaches to body relative to center
+            this.offsetY = offsetY;
+            
+            // Current position of the foot (tip)
+            this.x = 0;
+            this.y = 0;
+            
+            // Where the foot WANTS to be (The ideal resting spot)
+            this.targetX = 0;
+            this.targetY = 0;
+            
+            // Stepping state
+            this.isStepping = false;
+            this.stepProgress = 0; // 0 to 1
+            this.stepStartX = 0;
+            this.stepStartY = 0;
+        }
+
+        update(bodyX, bodyY, velocityX, velocityY) {
+            // 1. Calculate the "Ideal" position
+            // This is where the leg attaches + a bit of lookahead based on velocity
+            const idealX = bodyX + this.offsetX + velocityX * 15;
+            const idealY = bodyY + this.offsetY + velocityY * 15;
+
+            // 2. Distance from current foot pos to ideal pos
+            const dx = idealX - this.x;
+            const dy = idealY - this.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+
+            // 3. Trigger a step if too far or if the opposite leg has finished stepping
+            // We use (id % 2) to alternate legs (gait)
+            if (!this.isStepping && dist > 100) {
+                // To prevent all legs lifting at once, we add a random delay check or gait check
+                // Simple gait: only step if my neighbor isn't stepping? 
+                // For this simple toy, we just let them step but slightly randomized threshold
+                this.startStep(idealX, idealY);
+            }
+
+            // 4. Animate Step
+            if (this.isStepping) {
+                this.stepProgress += STEP_SPEED;
+                if (this.stepProgress >= 1) {
+                    this.stepProgress = 1;
+                    this.isStepping = false;
+                }
+
+                // Interpolate X/Y
+                const t = this.stepProgress;
+                // Ease-in-out curve
+                const ease = t < .5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+
+                this.x = this.stepStartX + (this.targetX - this.stepStartX) * ease;
+                this.y = this.stepStartY + (this.targetY - this.stepStartY) * ease;
+
+                // Lift foot (Sine wave arc)
+                this.y -= Math.sin(t * Math.PI) * STEP_HEIGHT;
+            }
+        }
+
+        startStep(tx, ty) {
+            this.isStepping = true;
+            this.stepProgress = 0;
+            this.stepStartX = this.x;
+            this.stepStartY = this.y;
+            this.targetX = tx;
+            this.targetY = ty;
+        }
+
+        draw(ctx, bodyX, bodyY) {
+            // Shoulder position (Body + Offset)
+            const sx = bodyX + this.offsetX;
+            const sy = bodyY + this.offsetY;
+
+            // Calculate Elbow using IK
+            // We flip every other leg for visual style
+            const elbow = solveIK(sx, sy, this.x, this.y, SEGMENT_LEN, SEGMENT_LEN, this.id % 2 === 0);
+
+            // Draw Leg
+            ctx.strokeStyle = '#00ff88';
+            ctx.lineWidth = 4;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            ctx.beginPath();
+            ctx.moveTo(sx, sy);
+            ctx.lineTo(elbow.x, elbow.y);
+            ctx.lineTo(this.x, this.y);
+            ctx.stroke();
+
+            // Draw Joints
+            ctx.fillStyle = '#004433';
+            ctx.beginPath(); ctx.arc(sx, sy, 5, 0, Math.PI*2); ctx.fill();
+            
+            ctx.fillStyle = '#fff';
+            ctx.beginPath(); ctx.arc(elbow.x, elbow.y, 3, 0, Math.PI*2); ctx.fill();
+        }
+    }
+
+    // --- MAIN CREATURE ---
+    const creature = {
+        x: window.innerWidth/2,
+        y: window.innerHeight/2,
+        legs: []
+    };
+
+    // Initialize Legs in a circle
+    for(let i=0; i<LEG_COUNT; i++) {
+        const angle = (i / LEG_COUNT) * Math.PI * 2;
+        // The legs flare out from the body
+        const ox = Math.cos(angle) * 40; 
+        const oy = Math.sin(angle) * 40; 
+        
+        const l = new Leg(i, ox, oy);
+        // Init feet positions
+        l.x = creature.x + ox * 2.5; 
+        l.y = creature.y + oy * 2.5;
+        creature.legs.push(l);
+    }
+
+    const mouse = { x: window.innerWidth/2, y: window.innerHeight/2 };
+
+    window.addEventListener('mousemove', e => {
+        mouse.x = e.clientX;
+        mouse.y = e.clientY;
+    });
+
+    // --- LOOP ---
+    function loop() {
+        ctx.fillStyle = 'rgba(5, 5, 5, 0.3)'; // Motion blur trails
+        ctx.fillRect(0, 0, width, height);
+
+        // 1. Move Body towards Mouse (Lerp)
+        const dx = mouse.x - creature.x;
+        const dy = mouse.y - creature.y;
+        
+        creature.x += dx * SPEED;
+        creature.y += dy * SPEED;
+
+        // Calculate velocity for "Lookahead" prediction
+        const vx = dx * SPEED;
+        const vy = dy * SPEED;
+
+        // 2. Update & Draw Legs
+        // Shadow pass
+        ctx.shadowBlur = 0;
+        creature.legs.forEach(l => {
+            l.update(creature.x, creature.y, vx, vy);
+        });
+
+        // Glow pass
+        ctx.shadowColor = '#00ff88';
+        ctx.shadowBlur = 15;
+        creature.legs.forEach(l => l.draw(ctx, creature.x, creature.y));
+
+        // 3. Draw Body
+        ctx.fillStyle = '#002211';
+        ctx.strokeStyle = '#00ff88';
+        ctx.lineWidth = 3;
+        
+        ctx.beginPath();
+        ctx.arc(creature.x, creature.y, BODY_RADIUS, 0, Math.PI*2);
+        ctx.fill();
+        ctx.stroke();
+
+        // 4. Draw "Eye" looking at mouse
+        const angle = Math.atan2(dy, dx);
+        const ex = creature.x + Math.cos(angle) * 10;
+        const ey = creature.y + Math.sin(angle) * 10;
+        
+        ctx.fillStyle = '#fff';
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = '#fff';
+        ctx.beginPath();
+        ctx.arc(ex, ey, 8, 0, Math.PI*2);
+        ctx.fill();
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>

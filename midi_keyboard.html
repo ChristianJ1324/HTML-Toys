@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GEMINI SYNTH PRO: ADVANCED SFX ENGINE</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;700&family=Space+Mono&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0a0c;
+            --panel: rgba(30, 30, 35, 0.7);
+            --accent: #00f2ff;
+            --bg-accent: rgba(0, 242, 255, 0.1);
+            --text: #f0f0f5;
+            --text-dim: #8e8e9a;
+            --key-white: #ffffff;
+            --key-black: #1a1a1e;
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8);
+            --module-bg: rgba(0, 0, 0, 0.3);
+        }
+
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            background-color: var(--bg);
+            background-image:
+                radial-gradient(circle at 20% 20%, rgba(0, 242, 255, 0.05) 0%, transparent 40%),
+                radial-gradient(circle at 80% 80%, rgba(186, 1, 255, 0.05) 0%, transparent 40%);
+            color: var(--text);
+            font-family: 'Outfit', sans-serif;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow-x: hidden;
+            user-select: none;
+        }
+
+        .synth {
+            background: var(--panel);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            max-width: 1000px;
+            width: 100%;
+            padding: 30px;
+            border-radius: 24px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--glass-border);
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 24px;
+        }
+
+        /* HEADER */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--glass-border);
+        }
+
+        .brand h1 {
+            margin: 0;
+            font-size: 1.8rem;
+            font-weight: 700;
+            letter-spacing: -1px;
+            background: linear-gradient(135deg, #fff 0%, var(--accent) 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .brand span {
+            font-family: 'Space Mono', monospace;
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .visualizer-container {
+            width: 200px;
+            height: 40px;
+            background: var(--module-bg);
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid var(--glass-border);
+        }
+
+        canvas#oscilloscope {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* CONTROLS GRID */
+        .controls-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
+        }
+
+        .module {
+            background: var(--module-bg);
+            padding: 20px;
+            border-radius: 16px;
+            border: 1px solid var(--glass-border);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+
+        .module:hover {
+            border-color: rgba(0, 242, 255, 0.3);
+        }
+
+        .module-title {
+            font-family: 'Space Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--accent);
+            text-transform: uppercase;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        /* SLIDERS & INPUTS */
+        .param {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .param label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            font-weight: 400;
+        }
+
+        .param span.val {
+            color: var(--text);
+            font-family: 'Space Mono', monospace;
+            font-size: 0.75rem;
+        }
+
+        input[type=range] {
+            width: 100%;
+            height: 6px;
+            background: #2a2a2e;
+            appearance: none;
+            border-radius: 10px;
+            outline: none;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            background: #fff;
+            border: 3px solid var(--accent);
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(0, 242, 255, 0.5);
+            transition: transform 0.1s ease;
+        }
+
+        input[type=range]::-webkit-slider-thumb:hover {
+            transform: scale(1.1);
+        }
+
+        select {
+            width: 100%;
+            background: #1a1a1e;
+            color: white;
+            border: 1px solid var(--glass-border);
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.9rem;
+            outline: none;
+            cursor: pointer;
+        }
+
+        /* KEYBOARD section */
+        .keyboard-wrapper {
+            position: relative;
+            width: 100%;
+            height: 220px;
+            margin-top: 20px;
+            background: #000;
+            border-radius: 20px;
+            padding: 10px;
+            border: 4px solid #1a1a1e;
+            box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.8);
+            overflow: hidden;
+        }
+
+        #keyboard {
+            display: flex;
+            height: 100%;
+            width: fit-content;
+            position: relative;
+            justify-content: flex-start;
+            margin: 0 auto;
+        }
+
+        .key {
+            position: relative;
+            cursor: pointer;
+            border-radius: 0 0 8px 8px;
+            transition: all 0.1s cubic-bezier(0.4, 0, 0.2, 1);
+            user-select: none;
+            touch-action: none;
+        }
+
+        .white-key {
+            width: 50px;
+            height: 100%;
+            background: linear-gradient(to bottom, #eee 0%, #fff 100%);
+            border: 1px solid #ccc;
+            z-index: 1;
+            box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.1);
+            margin-right: 2px;
+        }
+
+        .white-key.active {
+            background: linear-gradient(to bottom, var(--accent) 0%, #00d2d3 100%);
+            transform: translateY(2px) scaleY(0.98);
+            box-shadow: 0 0 20px var(--accent);
+            z-index: 10;
+        }
+
+        .white-key span {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #888;
+            font-size: 0.7rem;
+            font-weight: bold;
+            pointer-events: none;
+        }
+
+        .black-key {
+            width: 30px;
+            height: 60%;
+            background: linear-gradient(to bottom, #111 0%, #333 100%);
+            border-radius: 0 0 6px 6px;
+            z-index: 2;
+            position: absolute;
+            top: 0;
+            border: 1px solid #000;
+            box-shadow: 0 5px 10px rgba(0, 0, 0, 0.5);
+            transform: translateX(-15px);
+        }
+
+        .black-key.active {
+            background: var(--accent);
+            box-shadow: 0 0 15px var(--accent);
+        }
+
+        .black-key span {
+            position: absolute;
+            bottom: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #666;
+            font-size: 0.6rem;
+            pointer-events: none;
+        }
+
+        /* TRANSPORT & ACTIONS */
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 10px;
+        }
+
+        .btn {
+            flex: 1;
+            min-width: 140px;
+            padding: 14px;
+            background: rgba(255, 255, 255, 0.05);
+            color: white;
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            cursor: pointer;
+            font-family: 'Space Mono', monospace;
+            font-weight: bold;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--accent);
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        .btn.rec {
+            border-color: rgba(255, 71, 87, 0.4);
+            color: #ff4757;
+        }
+
+        .btn.rec.active {
+            background: #ff4757;
+            color: white;
+            border-color: #ff4757;
+            box-shadow: 0 0 20px rgba(255, 71, 87, 0.5);
+            animation: pulse 1.5s infinite;
+        }
+
+        .btn.play {
+            border-color: rgba(46, 213, 115, 0.4);
+            color: #2ed573;
+        }
+
+        .btn.play.active {
+            background: #2ed573;
+            color: white;
+            border-color: #2ed573;
+            box-shadow: 0 0 20px rgba(46, 213, 115, 0.5);
+        }
+
+        .btn.primary {
+            background: var(--accent);
+            color: #000;
+            border: none;
+        }
+
+        .btn.primary:hover {
+            opacity: 0.9;
+            transform: translateY(-2px);
+        }
+
+        @keyframes pulse {
+            0% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.7;
+                transform: scale(1.02);
+            }
+
+            100% {
+                opacity: 1;
+            }
+        }
+
+        /* SCROLLBAR */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        /* MOBILE OPTIMIZATIONS */
+        @media (max-width: 600px) {
+            .synth {
+                padding: 15px;
+                border-radius: 0;
+                border: none;
+            }
+
+            .header {
+                flex-direction: column;
+                gap: 15px;
+                align-items: flex-start;
+            }
+
+            .visualizer-container {
+                width: 100%;
+            }
+
+            .keyboard-wrapper {
+                height: 180px;
+                padding: 5px;
+            }
+
+            .white-key {
+                min-width: 35px;
+            }
+
+            .actions {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="synth">
+        <header class="header">
+            <div class="brand">
+                <h1>GEMINI PRO</h1>
+                <span>Advanced SFX Engine</span>
+            </div>
+            <div class="visualizer-container">
+                <canvas id="oscilloscope"></canvas>
+            </div>
+            <div id="status" style="font-size: 0.7rem; opacity: 0.6; font-family: 'Space Mono';">Engine: Ready</div>
+        </header>
+
+        <main class="controls-grid">
+            <!-- OSCILLATORS -->
+            <section class="module">
+                <div class="module-title">Osc 1 <span>Waveform</span></div>
+                <div class="param">
+                    <select id="waveform">
+                        <option value="sawtooth">Sawtooth</option>
+                        <option value="square">Square</option>
+                        <option value="sine">Sine</option>
+                        <option value="triangle">Triangle</option>
+                    </select>
+                </div>
+                <div class="param">
+                    <label>Detune <span class="val" id="detuneVal">10</span></label>
+                    <input type="range" id="detune" min="0" max="50" value="10">
+                </div>
+                <div class="param">
+                    <label>Noise Mix <span class="val" id="noiseMixVal">0.2</span></label>
+                    <input type="range" id="noiseMix" min="0" max="1" value="0.2" step="0.01">
+                </div>
+            </section>
+
+            <!-- ENVELOPE (ADSR) -->
+            <section class="module">
+                <div class="module-title">Envelope <span>ADSR</span></div>
+                <div class="param">
+                    <label>Attack <span class="val" id="attackVal">0.05s</span></label>
+                    <input type="range" id="attack" min="0.001" max="2" value="0.05" step="0.01">
+                </div>
+                <div class="param">
+                    <label>Decay <span class="val" id="decayVal">0.2s</span></label>
+                    <input type="range" id="decay" min="0.01" max="2" value="0.2" step="0.01">
+                </div>
+                <div class="param">
+                    <label>Sustain <span class="val" id="sustainVal">0.5</span></label>
+                    <input type="range" id="sustain" min="0" max="1" value="0.5" step="0.01">
+                </div>
+                <div class="param">
+                    <label>Release <span class="val" id="releaseVal">0.5s</span></label>
+                    <input type="range" id="release" min="0.01" max="3" value="0.5" step="0.01">
+                </div>
+            </section>
+
+            <!-- FILTER & LFO -->
+            <section class="module">
+                <div class="module-title">Filter <span>LFO</span></div>
+                <div class="param">
+                    <label>Cutoff <span class="val" id="filterVal">2000Hz</span></label>
+                    <input type="range" id="filter" min="20" max="10000" value="2000">
+                </div>
+                <div class="param">
+                    <label>Resonance <span class="val" id="resVal">1</span></label>
+                    <input type="range" id="res" min="0.1" max="20" value="1" step="0.1">
+                </div>
+                <div class="param">
+                    <label>LFO Rate <span class="val" id="lfoRateVal">6Hz</span></label>
+                    <input type="range" id="lfoRate" min="0.1" max="20" value="6" step="0.1">
+                </div>
+                <div class="param">
+                    <label>LFO Depth <span class="val" id="lfoDepthVal">500</span></label>
+                    <input type="range" id="lfoDepth" min="0" max="5000" value="500">
+                </div>
+            </section>
+
+            <!-- FX RACK -->
+            <section class="module">
+                <div class="module-title">FX Rack <span>SFX</span></div>
+                <div class="param">
+                    <label>Drive (Crunch) <span class="val" id="driveVal">20</span></label>
+                    <input type="range" id="drive" min="0" max="100" value="20">
+                </div>
+                <div class="param">
+                    <label>Bitcrush <span class="val" id="bitcrushVal">0</span></label>
+                    <input type="range" id="bitcrush" min="0" max="1" value="0" step="0.01">
+                </div>
+                <div class="param">
+                    <label>Delay <span class="val" id="delayVolVal">0.2</span></label>
+                    <input type="range" id="delayVol" min="0" max="0.8" value="0.2" step="0.01">
+                </div>
+                <div class="param">
+                    <label>Reverb (Space) <span class="val" id="reverbVal">0.1</span></label>
+                    <input type="range" id="reverbVol" min="0" max="0.9" value="0.1" step="0.01">
+                </div>
+            </section>
+        </main>
+
+        <section class="keyboard-wrapper">
+            <div id="keyboard"></div>
+        </section>
+
+        <footer class="actions">
+            <button class="btn rec" id="recBtn">Record Loop</button>
+            <button class="btn play" id="playBtn">Play Loop</button>
+            <button class="btn" id="clearBtn">Clear</button>
+            <button class="btn primary" id="dlBtn" style="display: none;">Download WAV</button>
+            <button class="btn" id="randomizeBtn">Randomize SFX</button>
+        </footer>
+    </div>
+
+    <script>
+        /**
+         * GEMINI PRO SYNTH ENGINE
+         * Advanced Web Audio Implementation
+         */
+
+        const AudioEngine = {
+            ctx: new (window.AudioContext || window.webkitAudioContext)(),
+            master: null,
+            analyser: null,
+            recorder: null,
+            fx: {},
+            params: {
+                waveform: 'sawtooth', detune: 10, noiseMix: 0.2,
+                attack: 0.05, decay: 0.2, sustain: 0.5, release: 0.5,
+                filter: 2000, res: 1, lfoRate: 6, lfoDepth: 500,
+                drive: 20, bitcrush: 0, delayVol: 0.2, reverbVol: 0.1
+            },
+            activeVoices: {},
+            isRecording: false,
+            isPlayingLoop: false,
+            loopEvents: [],
+            loopStartTime: 0,
+            loopDuration: 0,
+            loopTimers: [],
+
+            init() {
+                const ctx = this.ctx;
+
+                // MASTER CHAIN
+                this.master = ctx.createGain();
+                this.master.gain.value = 0.5;
+
+                this.analyser = ctx.createAnalyser();
+                this.analyser.fftSize = 256;
+
+                // FX: DISTORTION
+                this.fx.drive = ctx.createWaveShaper();
+                this.updateDrive(this.params.drive);
+
+                // FX: BITCRUSHER (Simulated with WaveShaper)
+                this.fx.bitcrush = ctx.createWaveShaper();
+                this.updateBitcrush(this.params.bitcrush);
+
+                // FX: DELAY
+                this.fx.delay = ctx.createDelay(2.0);
+                this.fx.delayFeedback = ctx.createGain();
+                this.fx.delayMix = ctx.createGain();
+                this.fx.delay.delayTime.value = 0.3;
+                this.fx.delayFeedback.gain.value = 0.4;
+                this.fx.delayMix.gain.value = this.params.delayVol;
+                this.fx.delay.connect(this.fx.delayFeedback);
+                this.fx.delayFeedback.connect(this.fx.delay);
+
+                // FX: REVERB (Convolver with generated impulse)
+                this.fx.reverb = ctx.createConvolver();
+                this.fx.reverbMix = ctx.createGain();
+                this.fx.reverbMix.gain.value = this.params.reverbVol;
+                this.generateReverbImpulse();
+
+                // FX: COMPRESSOR / LIMITER
+                this.fx.limiter = ctx.createDynamicsCompressor();
+                this.fx.limiter.threshold.setValueAtTime(-12, ctx.currentTime);
+                this.fx.limiter.knee.setValueAtTime(40, ctx.currentTime);
+                this.fx.limiter.ratio.setValueAtTime(12, ctx.currentTime);
+                this.fx.limiter.attack.setValueAtTime(0, ctx.currentTime);
+                this.fx.limiter.release.setValueAtTime(0.25, ctx.currentTime);
+
+                // RECORDER
+                this.recorder = ctx.createScriptProcessor(4096, 2, 2);
+                this.recorderData = { l: [], r: [], len: 0 };
+                this.recorder.onaudioprocess = (e) => {
+                    if (!this.isRecording) return;
+                    this.recorderData.l.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+                    this.recorderData.r.push(new Float32Array(e.inputBuffer.getChannelData(1)));
+                    this.recorderData.len += 4096;
+                };
+
+                // ROUTING
+                this.voiceBus = ctx.createGain();
+                this.voiceBus.connect(this.fx.drive);
+                this.fx.drive.connect(this.fx.bitcrush);
+
+                // Dry Path
+                this.fx.bitcrush.connect(this.fx.limiter);
+
+                // Wet Delay
+                this.fx.bitcrush.connect(this.fx.delay);
+                this.fx.delay.connect(this.fx.delayMix);
+                this.fx.delayMix.connect(this.fx.limiter);
+
+                // Wet Reverb
+                this.fx.bitcrush.connect(this.fx.reverb);
+                this.fx.reverb.connect(this.fx.reverbMix);
+                this.fx.reverbMix.connect(this.fx.limiter);
+
+                this.fx.limiter.connect(this.master);
+                this.master.connect(this.analyser);
+                this.analyser.connect(ctx.destination);
+                this.master.connect(this.recorder);
+                this.recorder.connect(ctx.destination);
+
+                this.setupVisualizer();
+                this.generateKeyboard();
+                this.bindEvents();
+            },
+
+            generateReverbImpulse() {
+                const length = this.ctx.sampleRate * 2;
+                const impulse = this.ctx.createBuffer(2, length, this.ctx.sampleRate);
+                for (let i = 0; i < 2; i++) {
+                    const chan = impulse.getChannelData(i);
+                    for (let j = 0; j < length; j++) {
+                        chan[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / length, 2);
+                    }
+                }
+                this.fx.reverb.buffer = impulse;
+            },
+
+            updateDrive(val) {
+                const k = val, n = 44100, curve = new Float32Array(n), deg = Math.PI / 180;
+                for (let i = 0; i < n; ++i) {
+                    let x = i * 2 / n - 1;
+                    curve[i] = (3 + k) * x * 20 * deg / (Math.PI + k * Math.abs(x));
+                }
+                this.fx.drive.curve = curve;
+            },
+
+            updateBitcrush(val) {
+                const n = 44100, curve = new Float32Array(n);
+                const bits = 1 + (1 - val) * 15;
+                const steps = Math.pow(2, bits);
+                for (let i = 0; i < n; ++i) {
+                    let x = i * 2 / n - 1;
+                    curve[i] = Math.round(x * steps) / steps;
+                }
+                this.fx.bitcrush.curve = curve;
+            },
+
+            generateKeyboard() {
+                const whiteNotes = [
+                    { k: 'a', n: 'C4', f: 261.63 },
+                    { k: 's', n: 'D4', f: 293.66 },
+                    { k: 'd', n: 'E4', f: 329.63 },
+                    { k: 'f', n: 'F4', f: 349.23 },
+                    { k: 'g', n: 'G4', f: 392.00 },
+                    { k: 'h', n: 'A4', f: 440.00 },
+                    { k: 'j', n: 'B4', f: 493.88 },
+                    { k: 'k', n: 'C5', f: 523.25 }
+                ];
+
+                const blackNotes = [
+                    { k: 'w', n: 'C#4', f: 277.18, afterWhite: 0 },
+                    { k: 'e', n: 'D#4', f: 311.13, afterWhite: 1 },
+                    { k: 't', n: 'F#4', f: 369.99, afterWhite: 3 },
+                    { k: 'y', n: 'G#4', f: 415.30, afterWhite: 4 },
+                    { k: 'u', n: 'A#4', f: 466.16, afterWhite: 5 }
+                ];
+
+                const container = document.getElementById('keyboard');
+
+                // Create white keys first
+                whiteNotes.forEach((note, index) => {
+                    const el = document.createElement('div');
+                    el.className = 'key white-key';
+                    el.dataset.note = note.n;
+                    el.dataset.freq = note.f;
+                    el.dataset.index = index;
+                    el.innerHTML = `<span>${note.k.toUpperCase()}</span>`;
+
+                    el.onpointerdown = (e) => {
+                        el.setPointerCapture(e.pointerId);
+                        this.play(note.n, note.f);
+                    };
+                    el.onpointerup = (e) => this.stop(note.n);
+                    el.onpointerleave = (e) => {
+                        if (e.buttons === 1) this.stop(note.n);
+                    };
+                    el.onpointerenter = (e) => {
+                        if (e.buttons === 1) this.play(note.n, note.f);
+                    };
+
+                    container.appendChild(el);
+                });
+
+                // Create black keys after white keys are in DOM
+                setTimeout(() => {
+                    const whiteKeys = container.querySelectorAll('.white-key');
+                    blackNotes.forEach(note => {
+                        const whiteKey = whiteKeys[note.afterWhite];
+                        if (!whiteKey) return;
+
+                        const el = document.createElement('div');
+                        el.className = 'key black-key';
+                        el.dataset.note = note.n;
+                        el.dataset.freq = note.f;
+                        el.innerHTML = `<span>${note.k.toUpperCase()}</span>`;
+
+                        // Position black key after its white key neighbor
+                        const whiteRect = whiteKey.getBoundingClientRect();
+                        const containerRect = container.getBoundingClientRect();
+                        const leftPos = whiteKey.offsetLeft + whiteKey.offsetWidth - 15;
+                        el.style.left = leftPos + 'px';
+
+                        el.onpointerdown = (e) => {
+                            el.setPointerCapture(e.pointerId);
+                            this.play(note.n, note.f);
+                        };
+                        el.onpointerup = (e) => this.stop(note.n);
+                        el.onpointerleave = (e) => {
+                            if (e.buttons === 1) this.stop(note.n);
+                        };
+                        el.onpointerenter = (e) => {
+                            if (e.buttons === 1) this.play(note.n, note.f);
+                        };
+
+                        container.appendChild(el);
+                    });
+                }, 0);
+            },
+
+            bindEvents() {
+                const ids = [
+                    'detune', 'noiseMix', 'attack', 'decay', 'sustain', 'release',
+                    'filter', 'res', 'lfoRate', 'lfoDepth', 'drive', 'bitcrush', 'delayVol', 'reverbVol'
+                ];
+                ids.forEach(id => {
+                    const input = document.getElementById(id);
+                    const valDisplay = document.getElementById(id + 'Val');
+                    input.oninput = (e) => {
+                        const val = parseFloat(e.target.value);
+                        this.params[id] = val;
+                        if (valDisplay) {
+                            let suffix = '';
+                            if (['attack', 'decay', 'release'].includes(id)) suffix = 's';
+                            if (id === 'filter' || id === 'lfoRate') suffix = 'Hz';
+                            valDisplay.innerText = val + suffix;
+                        }
+
+                        if (id === 'drive') this.updateDrive(val);
+                        if (id === 'bitcrush') this.updateBitcrush(val);
+                        if (id === 'delayVol') this.fx.delayMix.gain.setTargetAtTime(val, this.ctx.currentTime, 0.05);
+                        if (id === 'reverbVol') this.fx.reverbMix.gain.setTargetAtTime(val, this.ctx.currentTime, 0.05);
+                    };
+                });
+
+                document.getElementById('waveform').onchange = (e) => this.params.waveform = e.target.value;
+
+                window.onkeydown = (e) => {
+                    if (e.repeat) return;
+                    const key = e.key.toLowerCase();
+                    const keyData = Array.from(document.querySelectorAll('.key')).find(k => k.innerText.toLowerCase() === key);
+                    if (keyData) this.play(keyData.dataset.note, parseFloat(keyData.dataset.freq));
+                };
+                window.onkeyup = (e) => {
+                    const key = e.key.toLowerCase();
+                    const keyData = Array.from(document.querySelectorAll('.key')).find(k => k.innerText.toLowerCase() === key);
+                    if (keyData) this.stop(keyData.dataset.note);
+                };
+
+                document.getElementById('recBtn').onclick = () => this.toggleRecord();
+                document.getElementById('playBtn').onclick = () => this.toggleLoop();
+                document.getElementById('clearBtn').onclick = () => this.clearLoop();
+                document.getElementById('randomizeBtn').onclick = () => this.randomize();
+            },
+
+            play(note, freq) {
+                if (this.ctx.state === 'suspended') this.ctx.resume();
+                if (this.activeVoices[note]) return;
+
+                const t = this.ctx.currentTime;
+
+                const osc = this.ctx.createOscillator();
+                osc.type = this.params.waveform;
+                osc.frequency.value = freq;
+                osc.detune.value = (Math.random() * this.params.detune * 2) - this.params.detune;
+
+                const noise = this.ctx.createBufferSource();
+                const noiseBuf = this.ctx.createBuffer(1, this.ctx.sampleRate, this.ctx.sampleRate);
+                const data = noiseBuf.getChannelData(0);
+                for (let i = 0; i < this.ctx.sampleRate; i++) data[i] = Math.random() * 2 - 1;
+                noise.buffer = noiseBuf;
+                noise.loop = true;
+
+                const noiseGain = this.ctx.createGain();
+                noiseGain.gain.value = this.params.noiseMix;
+
+                const filter = this.ctx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.value = this.params.filter;
+                filter.Q.value = this.params.res;
+
+                const lfo = this.ctx.createOscillator();
+                const lfoGain = this.ctx.createGain();
+                lfo.frequency.value = this.params.lfoRate;
+                lfoGain.gain.value = this.params.lfoDepth;
+
+                const env = this.ctx.createGain();
+                env.gain.setValueAtTime(0, t);
+                env.gain.linearRampToValueAtTime(1, t + parseFloat(this.params.attack));
+                env.gain.linearRampToValueAtTime(this.params.sustain, t + parseFloat(this.params.attack) + parseFloat(this.params.decay));
+
+                osc.connect(filter);
+                noise.connect(noiseGain);
+                noiseGain.connect(filter);
+
+                lfo.connect(lfoGain);
+                lfoGain.connect(filter.frequency);
+
+                filter.connect(env);
+                env.connect(this.voiceBus);
+
+                osc.start(t);
+                noise.start(t);
+                lfo.start(t);
+
+                this.activeVoices[note] = { osc, noise, lfo, env, filter };
+                this.highlight(note, true);
+
+                if (this.isRecording) {
+                    this.loopEvents.push({ type: 'on', note, freq, time: t - this.loopStartTime });
+                }
+            },
+
+            stop(note) {
+                const voice = this.activeVoices[note];
+                if (!voice) return;
+
+                const t = this.ctx.currentTime;
+                const release = parseFloat(this.params.release);
+
+                voice.env.gain.cancelScheduledValues(t);
+                voice.env.gain.setValueAtTime(voice.env.gain.value, t);
+                voice.env.gain.exponentialRampToValueAtTime(0.001, t + release);
+
+                setTimeout(() => {
+                    if (this.activeVoices[note] === voice) {
+                        voice.osc.stop();
+                        voice.noise.stop();
+                        voice.lfo.stop();
+                        voice.osc.disconnect();
+                        voice.noise.disconnect();
+                        voice.lfo.disconnect();
+                        delete this.activeVoices[note];
+                    }
+                }, release * 1000 + 100);
+
+                this.highlight(note, false);
+
+                if (this.isRecording) {
+                    this.loopEvents.push({ type: 'off', note, time: t - this.loopStartTime });
+                }
+            },
+
+            highlight(note, active) {
+                const el = document.querySelector(`.key[data-note="${note}"]`);
+                if (el) active ? el.classList.add('active') : el.classList.remove('active');
+            },
+
+            toggleRecord() {
+                if (this.isPlayingLoop) this.toggleLoop();
+                const btn = document.getElementById('recBtn');
+                if (!this.isRecording) {
+                    this.isRecording = true;
+                    this.loopEvents = [];
+                    this.recorderData = { l: [], r: [], len: 0 };
+                    this.loopStartTime = this.ctx.currentTime;
+                    btn.classList.add('active');
+                    btn.innerText = "Stop Recording";
+                    document.getElementById('status').innerText = "Engine: Recording...";
+                } else {
+                    this.isRecording = false;
+                    this.loopDuration = this.ctx.currentTime - this.loopStartTime;
+                    btn.classList.remove('active');
+                    btn.innerText = "Record Loop";
+                    document.getElementById('status').innerText = "Engine: Loop Saved.";
+                    if (this.recorderData.len > 0) this.prepareDownload();
+                }
+            },
+
+            toggleLoop() {
+                if (this.isRecording) return;
+                const btn = document.getElementById('playBtn');
+                if (!this.isPlayingLoop) {
+                    if (this.loopEvents.length === 0) return;
+                    this.isPlayingLoop = true;
+                    btn.classList.add('active');
+                    btn.innerText = "Stop Loop";
+                    this.runLoop();
+                } else {
+                    this.isPlayingLoop = false;
+                    btn.classList.remove('active');
+                    btn.innerText = "Play Loop";
+                    this.loopTimers.forEach(clearTimeout);
+                    this.loopTimers = [];
+                }
+            },
+
+            runLoop() {
+                if (!this.isPlayingLoop) return;
+                this.loopEvents.forEach(ev => {
+                    const timer = setTimeout(() => {
+                        if (ev.type === 'on') this.play(ev.note, ev.freq);
+                        else this.stop(ev.note);
+                    }, ev.time * 1000);
+                    this.loopTimers.push(timer);
+                });
+                const loopEnd = setTimeout(() => this.runLoop(), this.loopDuration * 1000);
+                this.loopTimers.push(loopEnd);
+            },
+
+            clearLoop() {
+                this.loopEvents = [];
+                this.loopDuration = 0;
+                if (this.isPlayingLoop) this.toggleLoop();
+                document.getElementById('status').innerText = "Engine: Loop Cleared.";
+                document.getElementById('dlBtn').style.display = 'none';
+            },
+
+            randomize() {
+                const ids = [
+                    'detune', 'noiseMix', 'attack', 'decay', 'sustain', 'release',
+                    'filter', 'res', 'lfoRate', 'lfoDepth', 'drive', 'bitcrush', 'delayVol', 'reverbVol'
+                ];
+                ids.forEach(id => {
+                    const input = document.getElementById(id);
+                    const min = parseFloat(input.min);
+                    const max = parseFloat(input.max);
+                    const val = (Math.random() * (max - min) + min).toFixed(2);
+                    input.value = val;
+                    input.oninput({ target: { value: val } });
+                });
+                const waves = ['sawtooth', 'square', 'sine', 'triangle'];
+                const wInput = document.getElementById('waveform');
+                const wVal = waves[Math.floor(Math.random() * waves.length)];
+                wInput.value = wVal;
+                this.params.wave = wVal;
+                document.getElementById('status').innerText = "Engine: SFX Generated!";
+            },
+
+            setupVisualizer() {
+                const canvas = document.getElementById('oscilloscope');
+                const cctx = canvas.getContext('2d');
+                const bufferLen = this.analyser.frequencyBinCount;
+                const dataArray = new Uint8Array(bufferLen);
+                const draw = () => {
+                    requestAnimationFrame(draw);
+                    this.analyser.getByteTimeDomainData(dataArray);
+                    cctx.clearRect(0, 0, canvas.width, canvas.height);
+                    cctx.lineWidth = 2;
+                    cctx.strokeStyle = '#00f2ff';
+                    cctx.beginPath();
+                    const sliceWidth = canvas.width * 1.0 / bufferLen;
+                    let x = 0;
+                    for (let i = 0; i < bufferLen; i++) {
+                        const v = dataArray[i] / 128.0;
+                        const y = v * canvas.height / 2;
+                        if (i === 0) cctx.moveTo(x, y);
+                        else cctx.lineTo(x, y);
+                        x += sliceWidth;
+                    }
+                    cctx.lineTo(canvas.width, canvas.height / 2);
+                    cctx.stroke();
+                };
+                draw();
+            },
+
+            prepareDownload() {
+                const dlBtn = document.getElementById('dlBtn');
+                dlBtn.style.display = 'block';
+                dlBtn.onclick = () => {
+                    const wavBlob = this.exportWav(this.recorderData.l, this.recorderData.r, this.recorderData.len);
+                    const url = URL.createObjectURL(wavBlob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `gemini_pro_${Date.now()}.wav`;
+                    a.click();
+                };
+            },
+
+            exportWav(L, R, len) {
+                const buf = new ArrayBuffer(44 + len * 4);
+                const view = new DataView(buf);
+                const flatL = new Float32Array(len);
+                const flatR = new Float32Array(len);
+                let offset = 0;
+                L.forEach(chunk => { flatL.set(chunk, offset); offset += chunk.length; });
+                offset = 0;
+                R.forEach(chunk => { flatR.set(chunk, offset); offset += chunk.length; });
+                const s = (o, str) => { for (let i = 0; i < str.length; i++) view.setUint8(o + i, str.charCodeAt(i)); };
+                s(0, 'RIFF');
+                view.setUint32(4, 36 + len * 4, true);
+                s(8, 'WAVE');
+                s(12, 'fmt ');
+                view.setUint32(16, 16, true);
+                view.setUint16(20, 1, true);
+                view.setUint16(22, 2, true);
+                view.setUint32(24, this.ctx.sampleRate, true);
+                view.setUint32(28, this.ctx.sampleRate * 4, true);
+                view.setUint16(32, 4, true);
+                view.setUint16(34, 16, true);
+                s(36, 'data');
+                view.setUint32(40, len * 4, true);
+                let p = 44;
+                for (let i = 0; i < len; i++) {
+                    let sl = Math.max(-0.99, Math.min(0.99, flatL[i]));
+                    let sr = Math.max(-0.99, Math.min(0.99, flatR[i]));
+                    view.setInt16(p, sl < 0 ? sl * 0x8000 : sl * 0x7FFF, true); p += 2;
+                    view.setInt16(p, sr < 0 ? sr * 0x8000 : sr * 0x7FFF, true); p += 2;
+                }
+                return new Blob([view], { type: 'audio/wav' });
+            }
+        };
+
+        AudioEngine.init();
+    </script>
+</body>
+
+</html>

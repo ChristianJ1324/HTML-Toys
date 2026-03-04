@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Evo-Construct: Adaptive Topology</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; font-family: 'Consolas', monospace; color: #0ff; }
+        canvas { display: block; }
+        #ui {
+            position: absolute; top: 10px; left: 10px;
+            background: rgba(0, 10, 20, 0.9);
+            border: 1px solid #0ff;
+            padding: 15px;
+            width: 300px;
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.2);
+            pointer-events: auto;
+            user-select: none;
+        }
+        h1 { margin: 0 0 10px 0; font-size: 16px; text-transform: uppercase; border-bottom: 1px solid #005555; padding-bottom: 5px; color: #fff; }
+        .stat { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
+        .val { font-weight: bold; color: #fff; }
+        input[type=range] { width: 100%; margin: 8px 0; accent-color: #0ff; }
+        button {
+            width: 100%; background: #002222; color: #0ff; border: 1px solid #0ff; padding: 8px;
+            font-weight: bold; cursor: pointer; margin-top: 8px; text-transform: uppercase;
+        }
+        button:hover { background: #0ff; color: #000; }
+        #overlay {
+            position: absolute; bottom: 20px; left: 20px; font-size: 12px; color: #666; pointer-events: none;
+        }
+        .tag { color: #f0f; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <h1>Evo-Construct v3.0</h1>
+    <div class="stat"><span>Gen:</span> <span id="ui-gen" class="val">1</span></div>
+    <div class="stat"><span>Alive:</span> <span id="ui-alive" class="val">0</span></div>
+    <div class="stat"><span>Best Dist:</span> <span id="ui-dist" class="val">0m</span></div>
+    <div class="stat"><span>Complexity:</span> <span id="ui-cmplx" class="val">Low</span></div>
+    <hr style="border:0; border-top:1px solid #333; margin:8px 0;">
+    <label style="font-size:11px">Sim Speed <span id="speed-disp">1x</span></label>
+    <input type="range" id="sim-speed" min="1" max="50" step="1" value="1">
+    <button id="btn-reset">Reset Evolution</button>
+</div>
+
+<div id="overlay">
+    Red: Muscle (Active) | White: Bone (Rigid) | Green: Sticky Foot<br>
+    <span class="tag">Camera tracks the leader.</span>
+</div>
+
+<canvas id="sim"></canvas>
+
+<script>
+/**
+ * EVO-CONSTRUCT
+ * Topology Mutation System:
+ * 1. Starts as a box.
+ * 2. Mutates by "Extruding" a face (adding a triangle) -> Grows limbs.
+ * 3. Mutates physics properties (Friction, Muscle Strength).
+ */
+
+const canvas = document.getElementById('sim');
+const ctx = canvas.getContext('2d');
+let W, H;
+
+const CFG = {
+    popSize: 40,
+    genFrames: 800,
+    gravity: 0.3,
+    airFriction: 0.99,
+    groundFriction: 0.8,
+    physicsSteps: 16,     // High steps for stability
+    mutationRate: 0.1,    // Rate of weight change
+    topologyRate: 0.05,   // Rate of adding/removing limbs
+    maxNodes: 15          // Cap complexity to prevent lag
+};
+
+// --- GLOBALS ---
+let population = [];
+let obstacles = [];
+let generation = 1;
+let frames = 0;
+let camX = 0;
+let bestDist = 0;
+
+// --- MATH UTILS ---
+const Rnd = (min, max) => Math.random() * (max - min) + min;
+const Tanh = x => Math.tanh(x);
+const Dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+
+// --- NEURAL NETWORK ---
+class Brain {
+    constructor(inputSize, hiddenSize, outputSize) {
+        this.in = inputSize; this.hid = hiddenSize; this.out = outputSize;
+        // Weights
+        this.w1 = new Float32Array(inputSize * hiddenSize);
+        this.w2 = new Float32Array(hiddenSize * outputSize);
+        // Biases
+        this.b1 = new Float32Array(hiddenSize);
+        this.b2 = new Float32Array(outputSize);
+        
+        this.randomize();
+    }
+    
+    randomize() {
+        for(let i=0; i<this.w1.length; i++) this.w1[i] = Rnd(-1, 1);
+        for(let i=0; i<this.w2.length; i++) this.w2[i] = Rnd(-1, 1);
+        for(let i=0; i<this.b1.length; i++) this.b1[i] = Rnd(-1, 1);
+        for(let i=0; i<this.b2.length; i++) this.b2[i] = Rnd(-1, 1);
+    }
+
+    forward(inputs) {
+        // Hidden Layer
+        let h = new Float32Array(this.hid);
+        for(let i=0; i<this.hid; i++) {
+            let s = this.b1[i];
+            for(let j=0; j<this.in; j++) s += inputs[j] * this.w1[i*this.in + j];
+            h[i] = Tanh(s);
+        }
+        // Output Layer
+        let out = new Float32Array(this.out);
+        for(let i=0; i<this.out; i++) {
+            let s = this.b2[i];
+            for(let j=0; j<this.hid; j++) s += h[j] * this.w2[i*this.hid + j];
+            out[i] = Tanh(s);
+        }
+        return out;
+    }
+    
+    mutate() {
+        const mod = x => (Math.random() < CFG.mutationRate) ? x + Rnd(-0.5, 0.5) : x;
+        for(let i=0; i<this.w1.length; i++) this.w1[i] = mod(this.w1[i]);
+        for(let i=0; i<this.w2.length; i++) this.w2[i] = mod(this.w2[i]);
+    }
+    
+    clone() {
+        let b = new Brain(this.in, this.hid, this.out);
+        b.w1.set(this.w1); b.w2.set(this.w2);
+        b.b1.set(this.b1); b.b2.set(this.b2);
+        return b;
+    }
+}
+
+// --- PHYSICS ENTITIES ---
+class Node {
+    constructor(x, y) {
+        this.x = x; this.y = y;
+        this.oldx = x; this.oldy = y;
+        this.friction = 0.5; // 0=Ice, 1=Glue
+        this.mass = 1;
+    }
+}
+
+class Spring {
+    constructor(n1, n2, k, type) {
+        this.n1 = n1; // Index in node array
+        this.n2 = n2;
+        this.len = 0; // Set later
+        this.k = k;
+        this.type = type; // 0=Bone, 1=Muscle
+        this.actuation = 0;
+    }
+}
+
+// --- CREATURE ---
+class Creature {
+    constructor() {
+        this.nodes = [];
+        this.springs = [];
+        this.brain = null;
+        this.fitness = 0;
+        this.dead = false;
+        
+        // Base structure: A Box
+        this.addNode(0, 0);
+        this.addNode(40, 0);
+        this.addNode(40, 40);
+        this.addNode(0, 40);
+        
+        // Cross bracing
+        this.addSpring(0, 1, 0.8, 1); // Muscle Top
+        this.addSpring(1, 2, 0.8, 1); // Muscle Right
+        this.addSpring(2, 3, 0.8, 1); // Muscle Bottom
+        this.addSpring(3, 0, 0.8, 1); // Muscle Left
+        this.addSpring(0, 2, 0.8, 0); // Bone Cross
+        this.addSpring(1, 3, 0.8, 0); // Bone Cross
+        
+        // Init Brain (Inputs: 1 Oscillator + 1 Altitude + Nodes*2 (Touch/Vel))
+        // Outputs: Springs
+        this.resizeBrain();
+    }
+    
+    addNode(x, y) {
+        this.nodes.push(new Node(x, y));
+    }
+    
+    addSpring(n1, n2, k, type) {
+        // Prevent duplicates
+        for(let s of this.springs) {
+            if((s.n1 === n1 && s.n2 === n2) || (s.n1 === n2 && s.n2 === n1)) return;
+        }
+        let s = new Spring(n1, n2, k, type);
+        let p1 = this.nodes[n1];
+        let p2 = this.nodes[n2];
+        s.len = Dist(p1, p2);
+        this.springs.push(s);
+    }
+    
+    resizeBrain() {
+        // Dynamic brain size based on body complexity
+        let inputs = 4 + (this.nodes.length); // Osc, Angle, dy, GroundContact per node
+        let outputs = this.springs.length;
+        if(!this.brain) {
+            this.brain = new Brain(inputs, 20, outputs);
+        } else {
+            // If topology changed, we'd theoretically need to transplant weights.
+            // For simplicity in this version, we just create a new brain if size mismatches
+            // or zero-pad. Here we keep it simple: Re-init if drastic change (handled in mutate).
+        }
+    }
+
+    clone() {
+        let c = new Creature();
+        // Deep copy nodes/springs
+        c.nodes = this.nodes.map(n => {
+            let nn = new Node(n.x, n.y); // Pos reset handled by spawn
+            nn.friction = n.friction;
+            return nn;
+        });
+        c.springs = this.springs.map(s => {
+            let ns = new Spring(s.n1, s.n2, s.k, s.type);
+            ns.len = s.len;
+            return ns;
+        });
+        
+        // Adjust brain to match geometry
+        c.brain = this.brain.clone();
+        // Ensure brain output size matches springs (in case of copying bugs)
+        if(c.brain.out !== c.springs.length) {
+            c.brain = new Brain(4 + c.nodes.length, 20, c.springs.length);
+        }
+        
+        return c;
+    }
+    
+    mutateTopology() {
+        if(Math.random() > CFG.topologyRate) return;
+        
+        let choice = Math.random();
+        
+        // 1. EXTRUDE: Add a triangle to an existing spring (Growth)
+        if(choice < 0.6 && this.nodes.length < CFG.maxNodes) {
+            // Pick a random spring
+            let sIdx = Math.floor(Math.random() * this.springs.length);
+            let s = this.springs[sIdx];
+            
+            // Calculate midpoint + normal
+            let p1 = this.nodes[s.n1];
+            let p2 = this.nodes[s.n2];
+            let mx = (p1.x + p2.x) * 0.5;
+            let my = (p1.y + p2.y) * 0.5;
+            let dx = p2.y - p1.y; // Normal
+            let dy = p1.x - p2.x;
+            let len = Math.sqrt(dx*dx+dy*dy);
+            
+            // Add new node "outward"
+            let dist = Rnd(20, 50);
+            this.nodes.push(new Node(mx + (dx/len)*dist, my + (dy/len)*dist));
+            let newIdx = this.nodes.length - 1;
+            
+            // Connect to p1 and p2
+            this.addSpring(s.n1, newIdx, 0.5, 1); // Muscle
+            this.addSpring(s.n2, newIdx, 0.5, 1); // Muscle
+            this.addSpring(s.n1, newIdx, 0.8, 0); // Bone Brace (randomly)
+            
+            // Randomly sticky foot
+            if(Math.random() < 0.3) this.nodes[newIdx].friction = 0.95;
+            else this.nodes[newIdx].friction = 0.1;
+
+            // Rebuild brain for new body
+            this.brain = new Brain(4 + this.nodes.length, 24, this.springs.length);
+        }
+        
+        // 2. MODIFY SPRING: Change muscle/bone or stiffness
+        else if (choice < 0.9) {
+             let s = this.springs[Math.floor(Math.random() * this.springs.length)];
+             s.type = (s.type === 0) ? 1 : 0; // Flip type
+             s.k = Rnd(0.3, 0.9);
+        }
+    }
+
+    spawn(x, y) {
+        // Move all nodes to start pos
+        // Calculate center
+        let cx=0, cy=0;
+        for(let n of this.nodes) { cx += n.x; cy += n.y; }
+        cx /= this.nodes.length; cy /= this.nodes.length;
+        
+        for(let n of this.nodes) {
+            n.x = (n.x - cx) + x;
+            n.y = (n.y - cy) + y;
+            n.oldx = n.x; n.oldy = n.y;
+        }
+        this.dead = false;
+        this.fitness = 0;
+    }
+    
+    think(time) {
+        // Inputs
+        let inputs = [];
+        
+        // 1. Oscillator (Sine wave for rhythm)
+        inputs.push(Math.sin(time * 0.1));
+        inputs.push(Math.cos(time * 0.1));
+        
+        // 2. Center Velocity
+        let cx=0, cy=0, cvx=0, cvy=0;
+        for(let n of this.nodes) { 
+            cx+=n.x; cy+=n.y; 
+            cvx += (n.x - n.oldx);
+            cvy += (n.y - n.oldy);
+        }
+        let center = {x: cx/this.nodes.length, y: cy/this.nodes.length};
+        inputs.push(cvy/this.nodes.length); // Vertical Vel
+        
+        // 3. Rotation (approximate by node 0 vs center)
+        let dx = this.nodes[0].x - center.x;
+        let dy = this.nodes[0].y - center.y;
+        inputs.push(Math.atan2(dy, dx));
+        
+        // 4. Ground Sensors (for each node)
+        for(let n of this.nodes) {
+            // Is it touching ground or object? 
+            // We approximate by Y height relative to center, or actual contact flag from physics
+            inputs.push( (n.y > H - 110) ? 1 : 0 );
+        }
+        
+        let out = this.brain.forward(inputs);
+        
+        // Apply to muscles
+        for(let i=0; i<this.springs.length; i++) {
+            if(i < out.length) this.springs[i].actuation = out[i];
+        }
+    }
+    
+    update() {
+        // Physics integration (Verlet)
+        for(let n of this.nodes) {
+            let vx = (n.x - n.oldx) * CFG.airFriction;
+            let vy = (n.y - n.oldy) * CFG.airFriction;
+            n.oldx = n.x; n.oldy = n.y;
+            n.x += vx; n.y += vy + CFG.gravity;
+        }
+        
+        // Constraints
+        for(let i=0; i<CFG.physicsSteps; i++) {
+            // Springs
+            for(let s of this.springs) {
+                let p1 = this.nodes[s.n1];
+                let p2 = this.nodes[s.n2];
+                let dx = p2.x - p1.x;
+                let dy = p2.y - p1.y;
+                let dist = Math.sqrt(dx*dx + dy*dy);
+                if(dist === 0) continue;
+                
+                let target = s.len;
+                // Muscle expansion/contraction
+                if(s.type === 1) target *= (1 + s.actuation * 0.4); 
+                
+                let diff = (dist - target) / dist;
+                let k = s.k * 0.5; // Stiffness shared
+                
+                let ox = dx * diff * k;
+                let oy = dy * diff * k;
+                
+                p1.x += ox; p1.y += oy;
+                p2.x -= ox; p2.y -= oy;
+            }
+            
+            // Collisions
+            for(let n of this.nodes) {
+                // Ground
+                let groundY = H - 100;
+                if(n.y > groundY) {
+                    let vx = n.x - n.oldx;
+                    let vy = n.y - n.oldy;
+                    n.y = groundY;
+                    n.oldy = n.y + vy * 0.1; // Bounce
+                    n.oldx = n.x - vx * n.friction; // Variable friction
+                }
+                
+                // Obstacles
+                for(let o of obstacles) {
+                    if(n.x > o.x && n.x < o.x + o.w && n.y > o.y && n.y < o.y + o.h) {
+                        // Resolve
+                        let l = Math.abs(n.x - o.x);
+                        let r = Math.abs((o.x+o.w) - n.x);
+                        let t = Math.abs(n.y - o.y);
+                        let b = Math.abs((o.y+o.h) - n.y);
+                        let min = Math.min(l,r,t,b);
+                        
+                        let vx = n.x - n.oldx;
+                        let vy = n.y - n.oldy;
+
+                        if(min === t) { // Top
+                            n.y = o.y;
+                            n.oldy = n.y + vy * 0.1;
+                            n.oldx = n.x - vx * n.friction;
+                        } else if(min === l) { // Left
+                            n.x = o.x;
+                            n.oldx = n.x; // Wall slide
+                            // Allow climbing by preserving Y momentum if friction is high
+                            if(n.friction > 0.8) n.oldy = n.y - (vy * 0.5); 
+                        } else if(min === r) {
+                            n.x = o.x + o.w;
+                            n.oldx = n.x;
+                        } else {
+                            n.y = o.y + o.h;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Fitness & Death
+        let cx = 0;
+        for(let n of this.nodes) cx += n.x;
+        cx /= this.nodes.length;
+        this.fitness = cx;
+        
+        if(cx < camX - 300 || cx > camX + W + 100) this.dead = true; // Off screen cleanup
+    }
+    
+    draw(ctx, isLeader) {
+        // Draw Springs
+        ctx.lineWidth = isLeader ? 3 : 1;
+        for(let s of this.springs) {
+            let p1 = this.nodes[s.n1];
+            let p2 = this.nodes[s.n2];
+            
+            ctx.beginPath();
+            if(s.type === 1) {
+                // Muscle
+                let val = (s.actuation + 1) / 2; // 0-1
+                let intensity = Math.floor(val * 255);
+                ctx.strokeStyle = `rgba(255, ${255-intensity}, 0, ${isLeader ? 1 : 0.3})`;
+            } else {
+                // Bone
+                ctx.strokeStyle = `rgba(200, 255, 255, ${isLeader ? 1 : 0.2})`;
+            }
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.stroke();
+        }
+        
+        // Draw Nodes
+        if(isLeader) {
+            for(let n of this.nodes) {
+                ctx.beginPath();
+                // Green = Sticky, Blue = Slippery
+                ctx.fillStyle = (n.friction > 0.8) ? "#0f0" : "#00f";
+                ctx.arc(n.x, n.y, 4, 0, Math.PI*2);
+                ctx.fill();
+            }
+        }
+    }
+}
+
+// --- MAIN LOOP ---
+
+function init() {
+    onResize();
+    window.addEventListener('resize', onResize);
+    
+    // Gen Track
+    genObstacles();
+    
+    // Initial Pop
+    for(let i=0; i<CFG.popSize; i++) {
+        let c = new Creature();
+        c.spawn(100, H - 200);
+        population.push(c);
+    }
+    
+    loop();
+}
+
+function onResize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W;
+    canvas.height = H;
+}
+
+function genObstacles() {
+    obstacles = [];
+    let x = 400;
+    for(let i=0; i<50; i++) {
+        let w = Rnd(50, 150);
+        let h = Rnd(30, 120);
+        if(i > 5) h = Rnd(80, 200); // Higher walls later
+        
+        obstacles.push({x: x, y: H - 100 - h, w: w, h: h});
+        
+        // Occasionally add a "floating platform" to require jumping
+        if(Math.random() > 0.7) {
+            obstacles.push({x: x + w + 50, y: H - 100 - h - 100, w: 100, h: 20});
+        }
+        
+        x += w + Rnd(100, 400);
+    }
+}
+
+function evolve() {
+    population.sort((a, b) => b.fitness - a.fitness);
+    bestDist = Math.max(bestDist, population[0].fitness);
+    
+    let newPop = [];
+    
+    // 1. Elitism (Top 3)
+    for(let i=0; i<3; i++) {
+        let c = population[i].clone();
+        c.spawn(100, H - 200);
+        newPop.push(c);
+    }
+    
+    // 2. Breed & Mutate
+    while(newPop.length < CFG.popSize) {
+        let parent = population[Math.floor(Math.pow(Math.random(), 2) * (population.length/2))];
+        let child = parent.clone();
+        
+        child.brain.mutate();
+        child.mutateTopology(); // Can grow new limbs here!
+        child.spawn(100, H - 200);
+        newPop.push(child);
+    }
+    
+    population = newPop;
+    generation++;
+    frames = 0;
+    
+    // Update UI
+    document.getElementById('ui-gen').innerText = generation;
+    document.getElementById('ui-dist').innerText = Math.floor(bestDist) + "m";
+    document.getElementById('ui-cmplx').innerText = population[0].nodes.length + " nodes";
+}
+
+function loop() {
+    let speed = parseInt(document.getElementById('sim-speed').value);
+    document.getElementById('speed-disp').innerText = speed + "x";
+    
+    for(let k=0; k<speed; k++) {
+        frames++;
+        let active = 0;
+        let leader = population[0];
+        
+        for(let c of population) {
+            if(c.dead) continue;
+            c.think(frames);
+            c.update();
+            active++;
+            if(c.fitness > leader.fitness) leader = c;
+        }
+        
+        if(frames > CFG.genFrames || active === 0) {
+            evolve();
+            break;
+        }
+        
+        // Cam follow
+        let tx = leader.nodes[0].x - W*0.3;
+        camX += (tx - camX) * 0.1;
+        
+        document.getElementById('ui-alive').innerText = active;
+    }
+    
+    // Render
+    ctx.fillStyle = "#111";
+    ctx.fillRect(0, 0, W, H);
+    
+    ctx.save();
+    ctx.translate(-camX, 0);
+    
+    // Draw Ground
+    ctx.fillStyle = "#222";
+    ctx.fillRect(camX, H - 100, W, 100);
+    ctx.strokeStyle = "#0ff";
+    ctx.beginPath(); ctx.moveTo(camX, H-100); ctx.lineTo(camX+W, H-100); ctx.stroke();
+    
+    // Draw Obstacles
+    ctx.fillStyle = "#0f0";
+    ctx.strokeStyle = "#0a0";
+    for(let o of obstacles) {
+        ctx.fillStyle = "#001a1a";
+        ctx.fillRect(o.x, o.y, o.w, o.h);
+        ctx.strokeRect(o.x, o.y, o.w, o.h);
+    }
+    
+    // Draw Creatures
+    // Draw leader last to be on top
+    let sorted = [...population].sort((a,b) => a.fitness - b.fitness);
+    for(let i=0; i<sorted.length; i++) {
+        let isLeader = (i === sorted.length - 1);
+        sorted[i].draw(ctx, isLeader);
+    }
+    
+    ctx.restore();
+    requestAnimationFrame(loop);
+}
+
+document.getElementById('btn-reset').onclick = () => {
+    population = [];
+    generation = 1;
+    frames = 0;
+    bestDist = 0;
+    genObstacles();
+    for(let i=0; i<CFG.popSize; i++) {
+        let c = new Creature();
+        c.spawn(100, H - 200);
+        population.push(c);
+    }
+};
+
+init();
+
+</script>
+</body>
+</html>

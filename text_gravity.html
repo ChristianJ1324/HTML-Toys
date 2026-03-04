@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gravity Text Toy</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #111;
+            color: #eee;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none; /* Prevent text selection while dragging */
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+            background: rgba(30, 30, 30, 0.85);
+            backdrop-filter: blur(5px);
+            padding: 20px;
+            border-radius: 12px;
+            pointer-events: auto;
+            border: 1px solid #555;
+            max-width: 280px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+
+        h1 { margin: 0 0 10px 0; font-size: 18px; color: #fff; text-transform: uppercase; letter-spacing: 1px; }
+        p { font-size: 13px; color: #bbb; margin-bottom: 15px; line-height: 1.4; }
+
+        /* Controls Styling */
+        .control-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            font-size: 12px;
+            margin-bottom: 5px;
+            color: #aaa;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            cursor: pointer;
+        }
+
+        .custom-file-upload {
+            display: inline-block;
+            padding: 10px 0;
+            cursor: pointer;
+            background: linear-gradient(135deg, #6e8efb, #a777e3);
+            color: white;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: bold;
+            transition: transform 0.2s, opacity 0.2s;
+            text-align: center;
+            width: 100%;
+            box-sizing: border-box;
+            border: none;
+        }
+
+        .custom-file-upload:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .custom-file-upload:active {
+            transform: translateY(1px);
+        }
+
+        input[type="file"] { display: none; }
+        
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <h1>Gravity Text</h1>
+        <p>Turn text into bouncing bubbles.<br>Drag to throw. Scroll to zoom.</p>
+        
+        <div class="control-group">
+            <label for="gravity-slider">Gravity Force: <span id="grav-val">1.0</span></label>
+            <input id="gravity-slider" type="range" min="-1" max="2" step="0.1" value="1">
+        </div>
+
+        <label for="file-upload" class="custom-file-upload">
+            📄 Upload .txt File
+        </label>
+        <input id="file-upload" type="file" accept=".txt"/>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        // --- MATTER.JS SETUP ---
+        const Engine = Matter.Engine,
+              Render = Matter.Render,
+              Runner = Matter.Runner,
+              Bodies = Matter.Bodies,
+              Composite = Matter.Composite,
+              Events = Matter.Events,
+              Mouse = Matter.Mouse,
+              MouseConstraint = Matter.MouseConstraint;
+
+        // Create engine
+        const engine = Engine.create();
+        const world = engine.world;
+
+        // Create renderer
+        const container = document.getElementById('canvas-container');
+        const render = Render.create({
+            element: container,
+            engine: engine,
+            options: {
+                width: window.innerWidth,
+                height: window.innerHeight,
+                background: '#111', // Dark background
+                wireframes: false,
+                showAngleIndicator: false
+            }
+        });
+
+        // Add mouse control
+        const mouse = Mouse.create(render.canvas);
+        const mouseConstraint = MouseConstraint.create(engine, {
+            mouse: mouse,
+            constraint: {
+                stiffness: 0.2,
+                render: { visible: false }
+            }
+        });
+        Composite.add(world, mouseConstraint);
+        render.mouse = mouse;
+
+        // --- WALLS ---
+        function createWalls() {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            const thick = 200;
+            
+            const wallOptions = { 
+                isStatic: true, 
+                render: { fillStyle: '#222' } 
+            };
+            
+            const walls = [
+                Bodies.rectangle(w/2, h + thick/2, w + 200, thick, wallOptions), // Floor
+                Bodies.rectangle(w/2, -thick*2, w + 200, thick, wallOptions),    // Ceiling (high up)
+                Bodies.rectangle(w + thick/2, h/2, thick, h + 200, wallOptions), // Right
+                Bodies.rectangle(-thick/2, h/2, thick, h + 200, wallOptions)     // Left
+            ];
+            Composite.add(world, walls);
+        }
+
+        // --- GRAVITY CONTROL ---
+        const gravSlider = document.getElementById('gravity-slider');
+        const gravDisplay = document.getElementById('grav-val');
+        
+        gravSlider.addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            engine.world.gravity.y = val;
+            gravDisplay.textContent = val.toFixed(1);
+        });
+
+        // --- TEXT PARSING & GENERATION ---
+        
+        // Physics constants
+        const FONT_SIZE = 20; 
+        const BUBBLE_RADIUS = 14; 
+        const SPACING_X = 28;
+        const SPACING_Y = 32;
+
+        function clearWorld() {
+            // Keep walls (isStatic=true) and constraints, remove dynamic bodies
+            const bodies = Composite.allBodies(world);
+            const toRemove = bodies.filter(b => !b.isStatic);
+            Composite.remove(world, toRemove);
+        }
+
+        function generatePhysicsText(text) {
+            clearWorld();
+
+            const lines = text.split('\n');
+            const bodies = [];
+            
+            // Start slightly down and left
+            let startX = 50;
+            let startY = 100;
+
+            lines.forEach((line, lineIndex) => {
+                const chars = line.split('');
+                
+                chars.forEach((char, charIndex) => {
+                    if (char.trim() === '') return; // Skip whitespace
+
+                    const x = startX + (charIndex * SPACING_X);
+                    const y = startY + (lineIndex * SPACING_Y);
+
+                    // Skip if off screen
+                    if (x > window.innerWidth - 30) return;
+
+                    // COLOR GENERATION
+                    // We generate a color but store it in the body options
+                    // so we can use it in our custom render loop.
+                    const hue = Math.floor(Math.random() * 360);
+                    const color = `hsl(${hue}, 75%, 60%)`;
+
+                    // Create CIRCLE body
+                    const body = Bodies.circle(x, y, BUBBLE_RADIUS, {
+                        restitution: 0.6, // Bounciness (0-1)
+                        friction: 0.001,  // Low friction for rolling
+                        density: 0.04,
+                        render: {
+                            visible: false // HIDE standard Matter.js rendering
+                        }
+                    });
+
+                    // Attach custom data for our renderer
+                    body.plugin = {
+                        char: char,
+                        color: color,
+                        textColor: '#fff'
+                    };
+                    
+                    bodies.push(body);
+                });
+            });
+
+            Composite.add(world, bodies);
+        }
+
+        // --- CUSTOM RENDERING LOOP ---
+        Events.on(render, 'afterRender', function() {
+            const ctx = render.context;
+            const bodies = Composite.allBodies(world);
+
+            ctx.font = `bold ${FONT_SIZE}px "Courier New", monospace`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.lineWidth = 2;
+
+            bodies.forEach(body => {
+                if (body.isStatic) return; // Don't draw walls
+                if (!body.plugin) return;  // Safety check
+
+                const { x, y } = body.position;
+                const r = body.circleRadius; // Since we used Bodies.circle
+                const angle = body.angle;
+                const { char, color } = body.plugin;
+
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.rotate(angle);
+
+                // 1. Draw The Circle (Bubble)
+                ctx.beginPath();
+                ctx.arc(0, 0, r, 0, 2 * Math.PI);
+                
+                // Fill with semi-transparent color
+                ctx.fillStyle = color; 
+                ctx.globalAlpha = 0.2; // See-through bubbles
+                ctx.fill();
+                
+                // Stroke (outline of the bubble)
+                ctx.globalAlpha = 1.0;
+                ctx.strokeStyle = color;
+                ctx.stroke();
+
+                // 2. Draw The Text
+                // Black outline for text legibility
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 3;
+                ctx.strokeText(char, 0, 1);
+                
+                // White fill for text
+                ctx.fillStyle = '#fff';
+                ctx.fillText(char, 0, 1);
+
+                ctx.restore();
+            });
+        });
+
+        // --- FILE HANDLING ---
+        const fileInput = document.getElementById('file-upload');
+        
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                let text = e.target.result;
+                if (text.length > 2500) {
+                    alert("Truncating file to 2500 characters for performance.");
+                    text = text.substring(0, 2500);
+                }
+                generatePhysicsText(text);
+            };
+            reader.readAsText(file);
+        });
+
+        // --- INIT ---
+        createWalls();
+        Render.run(render);
+        const runner = Runner.create();
+        Runner.run(runner, engine);
+
+        // Resize support
+        window.addEventListener('resize', () => {
+            render.canvas.width = window.innerWidth;
+            render.canvas.height = window.innerHeight;
+            // Recreate walls
+            Composite.remove(world, Composite.allBodies(world).filter(b => b.isStatic));
+            createWalls();
+        });
+
+        // Initial Demo
+        generatePhysicsText("GRAVITY\n\nUse the slider\nto control physics.\n\nNegative gravity\nmakes text float!\n\n(Upload your own .txt)");
+
+    </script>
+</body>
+</html>

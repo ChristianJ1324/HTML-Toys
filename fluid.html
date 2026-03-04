@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Element Fluid Sim</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #111;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+            user-select: none;
+        }
+
+        /* The container for our canvas. We apply filters here for the "Liquid" look */
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            /* Default to no filter, JS will toggle this for Water mode */
+            transition: filter 0.3s ease;
+        }
+
+        canvas { display: block; }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 280px;
+            background: rgba(30, 30, 30, 0.9);
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid #444;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            z-index: 10;
+        }
+
+        h2 { margin: 0 0 15px 0; font-size: 16px; text-transform: uppercase; color: #aaa; letter-spacing: 1px; }
+
+        .control-group { margin-bottom: 15px; }
+        label { display: flex; justify-content: space-between; font-size: 13px; color: #ccc; margin-bottom: 5px; }
+        
+        /* Custom Range Slider */
+        input[type="range"] {
+            -webkit-appearance: none; width: 100%; height: 6px; background: #444; border-radius: 3px; outline: none;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 16px; height: 16px; background: #00ccff; border-radius: 50%; cursor: pointer;
+        }
+
+        /* Material Buttons */
+        .grid-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .mat-btn {
+            background: #2a2a2a; border: 1px solid #444; color: #fff; padding: 10px;
+            cursor: pointer; border-radius: 6px; font-size: 12px; transition: all 0.2s;
+            text-align: center;
+        }
+        .mat-btn:hover { background: #3a3a3a; }
+        .mat-btn.active { background: #00ccff; color: #000; border-color: #00ccff; font-weight: bold; }
+
+        .hint { font-size: 11px; color: #666; margin-top: 10px; text-align: center; }
+    </style>
+</head>
+<body oncontextmenu="return false;">
+
+    <div id="canvas-container">
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <div id="ui">
+        <h2>Element Selector</h2>
+        
+        <div class="control-group">
+            <div class="grid-buttons">
+                <div class="mat-btn active" onclick="setMode('water')">WATER</div>
+                <div class="mat-btn" onclick="setMode('fire')">FIRE</div>
+                <div class="mat-btn" onclick="setMode('smoke')">SMOKE</div>
+                <div class="mat-btn" onclick="setMode('sand')">SAND</div>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>Gravity <span id="val-grav">0.5</span></label>
+            <input type="range" id="slider-grav" min="-0.5" max="1.5" step="0.1" value="0.5">
+        </div>
+
+        <div class="control-group">
+            <label>Flow Rate <span id="val-flow">5</span></label>
+            <input type="range" id="slider-flow" min="1" max="20" step="1" value="5">
+        </div>
+        
+        <div class="control-group" style="text-align:center;">
+             <button class="mat-btn" style="width:100%; background:#422;" onclick="clearSim()">CLEAR ALL</button>
+        </div>
+
+        <div class="hint">Left Click to Pour • Right Click to Repel</div>
+    </div>
+
+<script>
+    // --- ENGINE CONFIGURATION ---
+    const CONFIG = {
+        gravity: 0.5,
+        flowRate: 5,
+        mode: 'water'
+    };
+
+    const MODES = {
+        water: { color: '#00ccff', gravity: 0.5, friction: 0.98, life: Infinity, blend: 'source-over', filter: 'blur(6px) contrast(12)', radius: 10, collision: true },
+        fire:  { color: '#ff4400', gravity: -0.1, friction: 0.96, life: 60,       blend: 'lighter',     filter: 'blur(4px)',               radius: 12, collision: false },
+        smoke: { color: '#aaaaaa', gravity: -0.05, friction: 0.96, life: 180,      blend: 'source-over', filter: 'blur(10px)',              radius: 20, collision: false },
+        sand:  { color: '#eebb44', gravity: 0.8,  friction: 0.80, life: Infinity, blend: 'source-over', filter: 'none',                    radius: 4,  collision: true }
+    };
+
+    // --- SETUP ---
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('canvas-container');
+    let width, height;
+
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // --- PARTICLE SYSTEM ---
+    class Particle {
+        constructor(x, y, type) {
+            this.x = x;
+            this.y = y;
+            this.type = type;
+            this.props = MODES[type];
+            
+            // Random spread on spawn
+            this.vx = (Math.random() - 0.5) * 4;
+            this.vy = (Math.random() - 0.5) * 4;
+            
+            this.life = this.props.life;
+            this.maxLife = this.props.life;
+            
+            // For fire/smoke randomness
+            this.size = this.props.radius * (0.8 + Math.random() * 0.5);
+        }
+
+        update() {
+            // 1. Apply Forces
+            this.vy += CONFIG.gravity;
+            
+            // 2. Move
+            this.x += this.vx;
+            this.y += this.vy;
+
+            // 3. Friction/Air Resistance
+            this.vx *= this.props.friction;
+            this.vy *= this.props.friction;
+
+            // 4. Life Decay (for smoke/fire)
+            if (this.life !== Infinity) {
+                this.life--;
+            }
+
+            // 5. Floor/Wall Collision (Only for Water/Sand)
+            if (this.props.collision) {
+                const r = this.size;
+                const bounce = 0.5;
+
+                if (this.y > height - r) {
+                    this.y = height - r;
+                    this.vy *= -bounce;
+                    // Extra friction on ground for sand (makes it pile)
+                    if(this.type === 'sand') this.vx *= 0.5; 
+                }
+                if (this.x < r) { this.x = r; this.vx *= -bounce; }
+                if (this.x > width - r) { this.x = width - r; this.vx *= -bounce; }
+            }
+        }
+    }
+
+    let particles = [];
+
+    // --- SPATIAL HASH (Optimization for Water Collision) ---
+    // This allows particles to pile up without killing the CPU
+    const cellSize = 20;
+    let grid = {};
+
+    function getGridKey(x, y) {
+        return (Math.floor(x / cellSize)) + "," + (Math.floor(y / cellSize));
+    }
+
+    function resolveCollisions() {
+        grid = {};
+        
+        // 1. Fill Grid
+        for (let p of particles) {
+            // Only collide water and sand
+            if (!p.props.collision) continue;
+
+            const key = getGridKey(p.x, p.y);
+            if (!grid[key]) grid[key] = [];
+            grid[key].push(p);
+        }
+
+        // 2. Check Neighbors
+        for (let p of particles) {
+            if (!p.props.collision) continue;
+
+            const key = getGridKey(p.x, p.y);
+            // Check current cell and neighbors
+            const neighbors = grid[key] || []; // Simplified for speed (just current cell + some overlap usually works ok for simple toys)
+            
+            for (let other of neighbors) {
+                if (p === other) continue;
+
+                const dx = p.x - other.x;
+                const dy = p.y - other.y;
+                const distSq = dx*dx + dy*dy;
+                const minR = p.size + other.size;
+                
+                // If overlapping
+                if (distSq < minR * minR && distSq > 0) {
+                    const dist = Math.sqrt(distSq);
+                    const overlap = minR - dist;
+                    const force = overlap * 0.5; // Push apart force
+                    
+                    const nx = dx / dist;
+                    const ny = dy / dist;
+
+                    p.x += nx * force;
+                    p.y += ny * force;
+                    
+                    // Simple pressure jitter to make water flow horizontally
+                    if (p.type === 'water') {
+                        p.vx += nx * 0.1;
+                        p.vy += ny * 0.1;
+                    }
+                }
+            }
+        }
+    }
+
+    // --- MAIN LOOP ---
+    function loop() {
+        // Clear screen
+        // If Fire mode, we use a dark clear to let trails show slightly
+        ctx.fillStyle = 'rgba(17, 17, 17, 1.0)';
+        ctx.fillRect(0, 0, width, height);
+
+        // Spawn on Mouse Hold
+        if (mouse.down) {
+            for (let i = 0; i < CONFIG.flowRate; i++) {
+                particles.push(new Particle(
+                    mouse.x + (Math.random()-0.5)*20, 
+                    mouse.y + (Math.random()-0.5)*20,
+                    CONFIG.mode
+                ));
+            }
+        }
+
+        // Mouse Repel (Right Click)
+        if (mouse.right) {
+            for (let p of particles) {
+                const dx = p.x - mouse.x;
+                const dy = p.y - mouse.y;
+                const d = Math.sqrt(dx*dx + dy*dy);
+                if (d < 150) {
+                    const force = (150 - d) * 0.2;
+                    p.vx += (dx/d) * force;
+                    p.vy += (dy/d) * force;
+                }
+            }
+        }
+
+        // Physics
+        resolveCollisions();
+        
+        // Render
+        // We have to sort or batch draw if we want different blend modes
+        // But for simplicity, we just change context state as we iterate (simpler, slightly slower)
+        
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.update();
+
+            // Dead check
+            if (p.life <= 0 || p.y > height + 50 || p.y < -500 || p.x < -50 || p.x > width + 50) {
+                particles.splice(i, 1);
+                continue;
+            }
+
+            // Draw
+            ctx.globalCompositeOperation = p.props.blend;
+            ctx.fillStyle = p.props.color;
+            
+            // Opacity for smoke/fire based on life
+            if (p.type === 'fire' || p.type === 'smoke') {
+                ctx.globalAlpha = p.life / p.maxLife;
+            } else {
+                ctx.globalAlpha = 1.0;
+            }
+
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // Reset Alpha/Blend for next frame
+        ctx.globalAlpha = 1.0;
+        ctx.globalCompositeOperation = 'source-over';
+
+        // Limit particle count for performance
+        if (particles.length > 1500) particles.shift();
+
+        requestAnimationFrame(loop);
+    }
+
+    // --- INPUT & UI ---
+    let mouse = { x: 0, y: 0, down: false, right: false };
+
+    window.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+    window.addEventListener('mousedown', e => {
+        if(e.target.closest('#ui')) return;
+        if(e.button === 0) mouse.down = true;
+        if(e.button === 2) mouse.right = true;
+    });
+    window.addEventListener('mouseup', () => { mouse.down = false; mouse.right = false; });
+
+    // UI Functions
+    window.setMode = function(mode) {
+        CONFIG.mode = mode;
+        
+        // Update Buttons
+        document.querySelectorAll('.mat-btn').forEach(b => b.classList.remove('active'));
+        // Find button with text matching mode
+        const buttons = document.querySelectorAll('.mat-btn');
+        for (let btn of buttons) {
+            if (btn.innerText.toLowerCase() === mode) btn.classList.add('active');
+        }
+
+        // Update Physics Sliders to match defaults
+        document.getElementById('slider-grav').value = MODES[mode].gravity;
+        CONFIG.gravity = MODES[mode].gravity;
+        document.getElementById('val-grav').innerText = CONFIG.gravity;
+
+        // Update CSS Filters (The visual magic)
+        container.style.filter = MODES[mode].filter;
+    };
+
+    window.clearSim = function() {
+        particles = [];
+    };
+
+    // Sliders
+    document.getElementById('slider-grav').oninput = function() {
+        CONFIG.gravity = parseFloat(this.value);
+        document.getElementById('val-grav').innerText = CONFIG.gravity;
+    };
+    document.getElementById('slider-flow').oninput = function() {
+        CONFIG.flowRate = parseInt(this.value);
+        document.getElementById('val-flow').innerText = CONFIG.flowRate;
+    };
+
+    // Start
+    setMode('water'); // Init default
+    loop();
+
+</script>
+</body>
+</html>

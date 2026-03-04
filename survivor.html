@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SURVIVOR.JS</title>
+    <style>
+        body {
+            margin: 0; overflow: hidden;
+            background: #1a1a1a;
+            font-family: 'Verdana', sans-serif;
+            color: white;
+            user-select: none;
+        }
+        canvas { display: block; }
+
+        /* HUD */
+        #hud {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+        }
+        #xp-bar-container {
+            position: absolute; top: 0; left: 0; width: 100%; height: 20px;
+            background: #333;
+        }
+        #xp-bar-fill {
+            width: 0%; height: 100%; background: #00aaff;
+            transition: width 0.2s;
+        }
+        #stats {
+            position: absolute; top: 30px; left: 20px;
+            font-size: 14px; text-shadow: 1px 1px 2px black;
+        }
+        #timer {
+            position: absolute; top: 30px; width: 100%; text-align: center;
+            font-size: 24px; font-weight: bold; text-shadow: 2px 2px 4px black;
+        }
+
+        /* LEVEL UP MENU */
+        #levelup-screen {
+            display: none;
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            justify-content: center; align-items: center; flex-direction: column;
+            pointer-events: auto;
+            z-index: 10;
+        }
+        .card-container { display: flex; gap: 20px; }
+        .card {
+            width: 200px; height: 260px;
+            background: #2a2a2a; border: 2px solid #555;
+            border-radius: 10px; padding: 20px;
+            text-align: center; cursor: pointer;
+            transition: transform 0.1s, border-color 0.1s;
+        }
+        .card:hover { transform: scale(1.05); border-color: #ffd700; background: #333; }
+        .card h3 { color: #ffd700; margin-bottom: 10px; font-size: 18px; }
+        .card p { font-size: 12px; color: #ccc; line-height: 1.4; }
+        .rarity { font-size: 10px; text-transform: uppercase; color: #888; margin-top: 20px; }
+
+        #game-over {
+            display: none;
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            text-align: center; font-size: 40px; color: #ff3333; font-weight: bold;
+            text-shadow: 0 0 20px #ff0000;
+        }
+    </style>
+</head>
+<body oncontextmenu="return false;">
+
+    <canvas id="c"></canvas>
+
+    <div id="hud">
+        <div id="xp-bar-container"><div id="xp-bar-fill"></div></div>
+        <div id="stats">LVL <span id="lvl-val">1</span></div>
+        <div id="timer">00:00</div>
+    </div>
+
+    <div id="levelup-screen">
+        <h2 style="color:white; margin-bottom:30px;">LEVEL UP! CHOOSE AN UPGRADE</h2>
+        <div class="card-container" id="cards"></div>
+    </div>
+
+    <div id="game-over">YOU DIED<br><span style="font-size:20px; color:white; cursor:pointer;" onclick="location.reload()">Click to Restart</span></div>
+
+<script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let width, height;
+
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // --- GAME STATE ---
+    const GAME = {
+        active: true,
+        paused: false,
+        time: 0,
+        frame: 0,
+        waveDifficulty: 1
+    };
+
+    const PLAYER = {
+        x: 0, y: 0,
+        speed: 3,
+        hp: 100, maxHp: 100,
+        xp: 0, nextLevelXp: 10, level: 1,
+        pickupRange: 100,
+        
+        // Weapon Stats
+        fireRate: 40, // Frames between shots
+        fireTimer: 0,
+        damage: 10,
+        multiShot: 1,
+        pierce: 1,
+        bulletSpeed: 7,
+        
+        // Aura (Area Damage)
+        auraRadius: 0,
+        auraDamage: 0.5,
+        
+        weapons: [] 
+    };
+    
+    // Starting Weapon
+    PLAYER.weapons.push({ type: 'wand', level: 1 });
+
+    const UPGRADES = [
+        { id: 'rate', name: 'Rapid Fire', desc: 'Increases firing speed by 15%.', rarity: 'Common', apply: () => { PLAYER.fireRate *= 0.85; } },
+        { id: 'multi', name: 'Double Tap', desc: 'Adds +1 projectile to your shots.', rarity: 'Rare', apply: () => { PLAYER.multiShot += 1; } },
+        { id: 'dmg', name: 'Hollow Point', desc: 'Increases bullet damage by +5.', rarity: 'Common', apply: () => { PLAYER.damage += 5; } },
+        { id: 'speed', name: 'Stim Pack', desc: 'Increases move speed by 10%.', rarity: 'Common', apply: () => { PLAYER.speed *= 1.1; } },
+        { id: 'aura', name: 'Toxic Cloud', desc: 'Damages enemies near you.', rarity: 'Rare', apply: () => { PLAYER.auraRadius += 30; PLAYER.auraRadius = Math.max(80, PLAYER.auraRadius); } },
+        { id: 'pierce', name: 'Railgun', desc: 'Bullets pierce through +1 enemy.', rarity: 'Legendary', apply: () => { PLAYER.pierce += 1; } },
+        { id: 'heal', name: 'Medkit', desc: 'Heal 50 HP immediately.', rarity: 'Common', apply: () => { PLAYER.hp = Math.min(PLAYER.maxHp, PLAYER.hp + 50); } },
+        { id: 'range', name: 'Magnet', desc: 'Increase XP pickup range.', rarity: 'Common', apply: () => { PLAYER.pickupRange += 50; } }
+    ];
+
+    const entities = {
+        enemies: [],
+        bullets: [],
+        gems: [],
+        texts: []
+    };
+
+    // --- INPUT ---
+    const keys = {};
+    window.addEventListener('keydown', e => keys[e.code] = true);
+    window.addEventListener('keyup', e => keys[e.code] = false);
+
+    // --- CLASSES ---
+
+    class Enemy {
+        constructor() {
+            // Spawn logic: Random edge of screen
+            const edge = Math.floor(Math.random() * 4); // 0:top, 1:right, 2:bottom, 3:left
+            const buffer = 50;
+            if(edge === 0) { this.x = Math.random()*width; this.y = -buffer; }
+            if(edge === 1) { this.x = width+buffer; this.y = Math.random()*height; }
+            if(edge === 2) { this.x = Math.random()*width; this.y = height+buffer; }
+            if(edge === 3) { this.x = -buffer; this.y = Math.random()*height; }
+
+            // Scaling difficulty
+            const diff = GAME.waveDifficulty;
+            this.hp = 15 + (diff * 5);
+            this.maxHp = this.hp;
+            this.speed = 1 + (Math.random() * 0.5) + (diff * 0.1);
+            this.damage = 5 + diff;
+            this.xpValue = 1 + Math.floor(diff/2);
+            this.size = 12;
+            this.color = `hsl(${0 + (diff*10)}, 70%, 50%)`; // Turn redder/yellower as waves progress
+        }
+
+        update() {
+            // Move towards player
+            const dx = PLAYER.x - this.x;
+            const dy = PLAYER.y - this.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            
+            // Normalize & Move
+            this.x += (dx/dist) * this.speed;
+            this.y += (dy/dist) * this.speed;
+
+            // Player Collision Check
+            if (dist < this.size + 15) { // 15 is approx player size
+                PLAYER.hp -= this.damage * 0.05; // Damage per frame overlap
+            }
+            
+            // Aura Damage Check
+            if (PLAYER.auraRadius > 0 && dist < PLAYER.auraRadius + this.size) {
+                this.hp -= PLAYER.auraDamage;
+                if(this.hp <= 0) this.die();
+            }
+        }
+
+        takeDamage(amt) {
+            this.hp -= amt;
+            // Pop floating text
+            entities.texts.push(new FloatText(Math.floor(amt), this.x, this.y, '#fff'));
+            if(this.hp <= 0) this.die();
+        }
+
+        die() {
+            entities.gems.push(new Gem(this.x, this.y, this.xpValue));
+            this.dead = true;
+        }
+
+        draw() {
+            ctx.fillStyle = this.color;
+            ctx.fillRect(this.x - this.size, this.y - this.size, this.size*2, this.size*2);
+        }
+    }
+
+    class Bullet {
+        constructor(x, y, vx, vy) {
+            this.x = x; this.y = y;
+            this.vx = vx; this.vy = vy;
+            this.life = 100;
+            this.pierce = PLAYER.pierce;
+            this.hitList = []; // Enemies already hit
+        }
+        update() {
+            this.x += this.vx; this.y += this.vy;
+            this.life--;
+        }
+        draw() {
+            ctx.fillStyle = '#ff0';
+            ctx.beginPath(); ctx.arc(this.x, this.y, 4, 0, Math.PI*2); ctx.fill();
+        }
+    }
+
+    class Gem {
+        constructor(x, y, val) {
+            this.x = x; this.y = y;
+            this.val = val;
+            this.magnetized = false;
+        }
+        update() {
+            const dx = PLAYER.x - this.x;
+            const dy = PLAYER.y - this.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+
+            if (dist < PLAYER.pickupRange) this.magnetized = true;
+
+            if (this.magnetized) {
+                const speed = 12; // Fast suck in
+                this.x += (dx/dist) * speed;
+                this.y += (dy/dist) * speed;
+                
+                if (dist < 20) {
+                    addXp(this.val);
+                    this.dead = true;
+                }
+            }
+        }
+        draw() {
+            ctx.fillStyle = '#0af';
+            ctx.beginPath();
+            ctx.moveTo(this.x, this.y - 5);
+            ctx.lineTo(this.x + 5, this.y);
+            ctx.lineTo(this.x, this.y + 5);
+            ctx.lineTo(this.x - 5, this.y);
+            ctx.fill();
+        }
+    }
+
+    class FloatText {
+        constructor(text, x, y, color) {
+            this.text = text; this.x = x; this.y = y; this.color = color;
+            this.life = 30;
+        }
+        update() { this.y -= 1; this.life--; }
+        draw() {
+            ctx.globalAlpha = this.life / 30;
+            ctx.fillStyle = this.color;
+            ctx.font = 'bold 12px Arial';
+            ctx.fillText(this.text, this.x, this.y);
+            ctx.globalAlpha = 1.0;
+        }
+    }
+
+    // --- SYSTEMS ---
+
+    function spawnEnemy() {
+        // Spawn Rate increases with time
+        // Curve: fast ramp up then steady
+        const spawnChance = 0.02 + (GAME.waveDifficulty * 0.005);
+        if(Math.random() < spawnChance) {
+            entities.enemies.push(new Enemy());
+        }
+    }
+
+    function fireWeapon() {
+        if(PLAYER.fireTimer > 0) {
+            PLAYER.fireTimer--;
+            return;
+        }
+
+        // Find nearest enemy
+        let nearest = null;
+        let minDst = Infinity;
+        for(let e of entities.enemies) {
+            const d = (e.x-PLAYER.x)**2 + (e.y-PLAYER.y)**2;
+            if(d < minDst) { minDst = d; nearest = e; }
+        }
+
+        if(nearest && minDst < 400000) { // Range check (approx 600px)
+            const angle = Math.atan2(nearest.y - PLAYER.y, nearest.x - PLAYER.x);
+            
+            // Multi-shot spread
+            const count = PLAYER.multiShot;
+            const spread = 0.2; // Radians
+            const startAngle = angle - (spread * (count-1))/2;
+
+            for(let i=0; i<count; i++) {
+                const a = startAngle + (i * spread);
+                const vx = Math.cos(a) * PLAYER.bulletSpeed;
+                const vy = Math.sin(a) * PLAYER.bulletSpeed;
+                entities.bullets.push(new Bullet(PLAYER.x, PLAYER.y, vx, vy));
+            }
+
+            PLAYER.fireTimer = PLAYER.fireRate;
+        }
+    }
+
+    function addXp(amt) {
+        PLAYER.xp += amt;
+        if(PLAYER.xp >= PLAYER.nextLevelXp) {
+            PLAYER.xp -= PLAYER.nextLevelXp;
+            PLAYER.level++;
+            PLAYER.nextLevelXp = Math.floor(PLAYER.nextLevelXp * 1.3);
+            PLAYER.hp = PLAYER.maxHp; // Heal on level up
+            
+            document.getElementById('lvl-val').innerText = PLAYER.level;
+            triggerLevelUp();
+        }
+        // UI Update
+        const pct = (PLAYER.xp / PLAYER.nextLevelXp) * 100;
+        document.getElementById('xp-bar-fill').style.width = pct + '%';
+    }
+
+    function triggerLevelUp() {
+        GAME.paused = true;
+        const screen = document.getElementById('levelup-screen');
+        const container = document.getElementById('cards');
+        container.innerHTML = ''; // Clear old
+
+        // Pick 3 Random Upgrades
+        const choices = [];
+        for(let i=0; i<3; i++) {
+            const r = UPGRADES[Math.floor(Math.random() * UPGRADES.length)];
+            choices.push(r);
+        }
+
+        choices.forEach(u => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `<h3>${u.name}</h3><p>${u.desc}</p><div class="rarity">${u.rarity}</div>`;
+            card.onclick = () => {
+                u.apply();
+                screen.style.display = 'none';
+                GAME.paused = false;
+                loop();
+            };
+            container.appendChild(card);
+        });
+
+        screen.style.display = 'flex';
+    }
+
+    // --- MAIN LOOP ---
+
+    PLAYER.x = width/2; PLAYER.y = height/2;
+
+    function loop() {
+        if(GAME.paused || !GAME.active) return;
+
+        // 1. Logic
+        GAME.frame++;
+        if(GAME.frame % 60 === 0) {
+            GAME.time++;
+            // Update timer UI
+            const m = Math.floor(GAME.time / 60).toString().padStart(2,'0');
+            const s = (GAME.time % 60).toString().padStart(2,'0');
+            document.getElementById('timer').innerText = `${m}:${s}`;
+            
+            // Increase Difficulty every 30 seconds
+            if(GAME.time % 30 === 0) GAME.waveDifficulty++;
+        }
+
+        // Player Move
+        let mx = 0, my = 0;
+        if(keys['KeyW'] || keys['ArrowUp']) my = -1;
+        if(keys['KeyS'] || keys['ArrowDown']) my = 1;
+        if(keys['KeyA'] || keys['ArrowLeft']) mx = -1;
+        if(keys['KeyD'] || keys['ArrowRight']) mx = 1;
+        
+        // Normalize
+        if(mx!==0 || my!==0) {
+            const len = Math.sqrt(mx*mx + my*my);
+            PLAYER.x += (mx/len) * PLAYER.speed;
+            PLAYER.y += (my/len) * PLAYER.speed;
+        }
+
+        // Bounds Check
+        PLAYER.x = Math.max(10, Math.min(width-10, PLAYER.x));
+        PLAYER.y = Math.max(10, Math.min(height-10, PLAYER.y));
+
+        // Auto Fire
+        fireWeapon();
+
+        // Spawn Enemies
+        spawnEnemy();
+
+        // 2. Entity Updates & Collision
+        
+        // Bullets
+        for(let i=entities.bullets.length-1; i>=0; i--) {
+            const b = entities.bullets[i];
+            b.update();
+            
+            // Screen Bounds removal
+            if(b.x < 0 || b.x > width || b.y < 0 || b.y > height || b.life <= 0) {
+                entities.bullets.splice(i, 1);
+                continue;
+            }
+
+            // Bullet vs Enemy
+            for(let e of entities.enemies) {
+                // Check if already hit this enemy (for piercing)
+                if(b.hitList.includes(e)) continue;
+
+                const dx = b.x - e.x; const dy = b.y - e.y;
+                if(dx*dx + dy*dy < e.size*e.size) { // Hit
+                    e.takeDamage(PLAYER.damage);
+                    b.hitList.push(e);
+                    b.pierce--;
+                    if(b.pierce <= 0) {
+                        entities.bullets.splice(i, 1);
+                        break; 
+                    }
+                }
+            }
+        }
+
+        // Enemies
+        for(let i=entities.enemies.length-1; i>=0; i--) {
+            const e = entities.enemies[i];
+            e.update();
+            if(e.dead) entities.enemies.splice(i, 1);
+        }
+
+        // Gems
+        for(let i=entities.gems.length-1; i>=0; i--) {
+            const g = entities.gems[i];
+            g.update();
+            if(g.dead) entities.gems.splice(i, 1);
+        }
+
+        // Text
+        for(let i=entities.texts.length-1; i>=0; i--) {
+            const t = entities.texts[i];
+            t.update();
+            if(t.life <= 0) entities.texts.splice(i, 1);
+        }
+
+        // Check Player Death
+        if(PLAYER.hp <= 0) {
+            GAME.active = false;
+            document.getElementById('game-over').style.display = 'block';
+        }
+
+        // 3. Render
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0, 0, width, height);
+
+        // Draw Aura
+        if(PLAYER.auraRadius > 0) {
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
+            ctx.beginPath(); ctx.arc(PLAYER.x, PLAYER.y, PLAYER.auraRadius, 0, Math.PI*2); ctx.fill();
+            ctx.strokeStyle = 'rgba(0, 255, 0, 0.3)';
+            ctx.stroke();
+        }
+
+        // Draw Gems
+        entities.gems.forEach(g => g.draw());
+
+        // Draw Player
+        ctx.fillStyle = '#00aaff';
+        ctx.fillRect(PLAYER.x - 10, PLAYER.y - 10, 20, 20);
+        
+        // Draw HP Bar above player
+        const hpPct = PLAYER.hp / PLAYER.maxHp;
+        ctx.fillStyle = '#f00';
+        ctx.fillRect(PLAYER.x - 15, PLAYER.y - 20, 30, 4);
+        ctx.fillStyle = '#0f0';
+        ctx.fillRect(PLAYER.x - 15, PLAYER.y - 20, 30 * hpPct, 4);
+
+        // Draw Enemies
+        entities.enemies.forEach(e => e.draw());
+
+        // Draw Bullets
+        entities.bullets.forEach(b => b.draw());
+
+        // Draw Text
+        entities.texts.forEach(t => t.draw());
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>

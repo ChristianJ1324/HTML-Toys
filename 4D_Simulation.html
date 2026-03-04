@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>HYPER-CUBE V4: SINGULARITY</title>
+    <style>
+        body { 
+            margin: 0; 
+            background: #000; 
+            overflow: hidden; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            color: #fff; 
+            user-select: none;
+        }
+
+        canvas { 
+            display: block; 
+            background: radial-gradient(circle at center, #111 0%, #000 100%);
+        }
+
+        /* SCROLLABLE CONTROL PANEL */
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            width: 280px;
+            background: rgba(10, 10, 10, 0.92);
+            border: 1px solid #444;
+            border-left: 3px solid #00d2ff;
+            padding: 15px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.7);
+            max-height: 90vh; /* Prevent it from going off screen */
+            overflow-y: auto; /* Scroll if too tall */
+            scrollbar-width: thin;
+            scrollbar-color: #00d2ff #222;
+        }
+
+        /* CUSTOM SCROLLBAR */
+        #controls::-webkit-scrollbar { width: 6px; }
+        #controls::-webkit-scrollbar-track { background: #222; }
+        #controls::-webkit-scrollbar-thumb { background: #00d2ff; }
+
+        h2 { 
+            margin: 0 0 10px 0; 
+            font-size: 13px; 
+            text-transform: uppercase; 
+            color: #00d2ff; 
+            border-bottom: 1px solid #444; 
+            padding-bottom: 5px;
+            letter-spacing: 2px;
+            text-shadow: 0 0 5px rgba(0, 210, 255, 0.5);
+        }
+
+        .section { margin-bottom: 15px; border-bottom: 1px solid #222; padding-bottom: 10px; }
+        .section:last-child { border-bottom: none; }
+
+        .control-group { margin-bottom: 10px; }
+        .label { 
+            display: flex; 
+            justify-content: space-between; 
+            font-size: 10px; 
+            color: #aaa; 
+            margin-bottom: 3px; 
+            text-transform: uppercase;
+        }
+        
+        input[type=range] {
+            width: 100%;
+            -webkit-appearance: none;
+            background: #222;
+            height: 4px;
+            border-radius: 2px;
+            outline: none;
+        }
+        
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            background: #00d2ff;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.2s;
+        }
+        
+        input[type=range]::-webkit-slider-thumb:hover {
+            background: #fff;
+            box-shadow: 0 0 10px #00d2ff;
+            transform: scale(1.2);
+        }
+
+        .value { color: #fff; font-weight: bold; font-family: monospace; }
+        
+        #instructions {
+            margin-top: 5px;
+            font-size: 9px;
+            color: #666;
+            font-style: italic;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+<div id="controls">
+    <div class="section">
+        <h2>Hyper-Parameters</h2>
+        <div class="control-group">
+            <div class="label">Zoom (3D Scale) <span id="v-zoom" class="value">2.5</span></div>
+            <input type="range" id="zoom" min="0.5" max="6.0" step="0.1" value="2.5">
+        </div>
+        <div class="control-group">
+            <div class="label">4D Depth (Fisheye) <span id="v-fov" class="value">2.0</span></div>
+            <input type="range" id="fov" min="1.1" max="4.0" step="0.1" value="2.0">
+        </div>
+        <div class="control-group">
+            <div class="label">Rotation Speed <span id="v-speed" class="value">0.01</span></div>
+            <input type="range" id="speed" min="0" max="0.05" step="0.001" value="0.01">
+        </div>
+        <div class="control-group">
+            <div class="label">Math Connectivity <span id="v-conn" class="value">1</span></div>
+            <input type="range" id="conn" min="1" max="4" step="1" value="1">
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Visual Styles</h2>
+        <div class="control-group">
+            <div class="label">Color Hue Shift <span id="v-hue" class="value">0</span></div>
+            <input type="range" id="hue" min="0" max="360" step="1" value="0">
+        </div>
+        <div class="control-group">
+            <div class="label">Line Thickness <span id="v-thick" class="value">2.0</span></div>
+            <input type="range" id="thick" min="0.1" max="10.0" step="0.1" value="2.0">
+        </div>
+        <div class="control-group">
+            <div class="label">Node Size <span id="v-nodes" class="value">6.0</span></div>
+            <input type="range" id="nodes" min="0" max="20.0" step="0.5" value="6.0">
+        </div>
+        <div class="control-group">
+            <div class="label">Hyper-Breathing <span id="v-breath" class="value">0.0</span></div>
+            <input type="range" id="breath" min="0" max="0.5" step="0.01" value="0.0">
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Manual 4D Rotors</h2>
+        <div class="control-group">
+            <div class="label">Rotate X-W</div>
+            <input type="range" id="rxw" min="0" max="6.28" step="0.01" value="0">
+        </div>
+        <div class="control-group">
+            <div class="label">Rotate Y-W</div>
+            <input type="range" id="ryw" min="0" max="6.28" step="0.01" value="0">
+        </div>
+        <div class="control-group">
+            <div class="label">Rotate Z-W</div>
+            <input type="range" id="rzw" min="0" max="6.28" step="0.01" value="0">
+        </div>
+    </div>
+
+    <div id="instructions">
+        [MOUSE] Drag BG to rotate 3D view
+    </div>
+</div>
+
+<canvas id="c"></canvas>
+
+<script>
+/**
+ * HYPER-CUBE V4
+ * * SAFETY UPDATE:
+ * - Added epsilon clamping to the stereographic projection to prevents division by zero.
+ * (Prevents the "singularity crash" when W approaches the Camera Plane).
+ * * NEW FEATURES:
+ * - Breathing engine (sine-wave scaling).
+ * - Full style control (Hue, Line Width, Node Size).
+ */
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let width, height, cx, cy;
+let time = 0; // Global time for breathing animation
+
+// --- CONFIGURATION ---
+const config = {
+    zoom: 2.5,
+    fov4: 2.0,     // 4D Camera Distance
+    speed: 0.01,
+    connectivity: 1, 
+    hueOffset: 0,
+    lineThick: 2.0,
+    nodeSize: 6.0,
+    breathing: 0.0,
+    manual: { xw: 0, yw: 0, zw: 0 },
+    mouse: { x: 0, y: 0 }
+};
+
+// --- MATH CORE ---
+class Point4 {
+    constructor(x, y, z, w) {
+        this.x = x; this.y = y; this.z = z; this.w = w;
+    }
+}
+
+// 16 Vertices of a Tesseract
+let vertices = [];
+for(let i=0; i<16; i++) {
+    vertices.push(new Point4(
+        (i & 1) ? 1 : -1,
+        (i & 2) ? 1 : -1,
+        (i & 4) ? 1 : -1,
+        (i & 8) ? 1 : -1
+    ));
+}
+
+// Calculate edges based on coordinate differences
+function getEdges(threshold) {
+    let e = [];
+    for(let i=0; i<vertices.length; i++) {
+        for(let j=i+1; j<vertices.length; j++) {
+            let diff = 0;
+            let v1 = vertices[i];
+            let v2 = vertices[j];
+            if(v1.x !== v2.x) diff++;
+            if(v1.y !== v2.y) diff++;
+            if(v1.z !== v2.z) diff++;
+            if(v1.w !== v2.w) diff++;
+            if(diff === threshold) e.push([i, j]);
+        }
+    }
+    return e;
+}
+
+// 4D Rotation Functions
+function rotXW(p, t) { let x=p.x, w=p.w, c=Math.cos(t), s=Math.sin(t); p.x = x*c - w*s; p.w = x*s + w*c; }
+function rotYW(p, t) { let y=p.y, w=p.w, c=Math.cos(t), s=Math.sin(t); p.y = y*c - w*s; p.w = y*s + w*c; }
+function rotZW(p, t) { let z=p.z, w=p.w, c=Math.cos(t), s=Math.sin(t); p.z = z*c - w*s; p.w = z*s + w*c; }
+function rotXY(p, t) { let x=p.x, y=p.y, c=Math.cos(t), s=Math.sin(t); p.x = x*c - y*s; p.y = x*s + y*c; }
+function rotXZ(p, t) { let x=p.x, z=p.z, c=Math.cos(t), s=Math.sin(t); p.x = x*c - z*s; p.z = x*s + z*c; }
+function rotYZ(p, t) { let y=p.y, z=p.z, c=Math.cos(t), s=Math.sin(t); p.y = y*c - z*s; p.z = y*s + z*c; }
+
+// --- ENGINE ---
+
+let autoAngle = 0;
+let computedEdges = getEdges(1);
+
+function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+    cx = width/2;
+    cy = height/2;
+}
+window.addEventListener('resize', resize);
+resize();
+
+function render() {
+    // 1. Clear Screen
+    ctx.fillStyle = "#000"; 
+    ctx.fillRect(0, 0, width, height);
+    
+    // 2. Update Physics
+    autoAngle += config.speed;
+    time += 0.05;
+
+    // Calculate Breathing Scale
+    // Sine wave that goes from 1.0 to (1.0 + breathing_amount)
+    let breathScale = 1.0 + (Math.sin(time) * config.breathing);
+
+    // 3. Transform Vertices
+    let projected = [];
+    
+    for(let i=0; i<vertices.length; i++) {
+        let p = { ...vertices[i] }; 
+
+        // Apply Breathing Scale
+        p.x *= breathScale;
+        p.y *= breathScale;
+        p.z *= breathScale;
+        p.w *= breathScale;
+
+        // Apply Rotations
+        rotXW(p, config.manual.xw + autoAngle);
+        rotYW(p, config.manual.yw + autoAngle * 0.5);
+        rotZW(p, config.manual.zw);
+        rotYZ(p, config.mouse.y);
+        rotXZ(p, config.mouse.x);
+
+        // --- SAFE 4D PROJECTION ---
+        let wDist = config.fov4;
+        
+        // ** CRASH FIX **: 
+        // We calculate the distance from the point to the camera plane.
+        // If it gets too close to 0, we clamp it to 0.1.
+        // This prevents the "Infinity" explosion.
+        let distance4d = wDist - p.w;
+        if (Math.abs(distance4d) < 0.1) distance4d = 0.1; 
+        
+        let wInv = 1 / distance4d; 
+        
+        let p3 = {
+            x: p.x * wInv,
+            y: p.y * wInv,
+            z: p.z * wInv,
+            w: p.w 
+        };
+
+        // --- 3D PROJECTION ---
+        let zDist = 4; 
+        let zInv = 1 / (zDist - p3.z); 
+        
+        // Scale calculation
+        let scale = config.zoom * 150; 
+
+        let p2 = {
+            x: p3.x * zInv * scale + cx,
+            y: p3.y * zInv * scale + cy,
+            w: p3.w,
+            scale: zInv // Used for node size
+        };
+        
+        projected.push(p2);
+    }
+
+    // 4. Draw Edges
+    ctx.lineWidth = config.lineThick;
+    ctx.lineCap = 'round';
+
+    for(let edge of computedEdges) {
+        let p1 = projected[edge[0]];
+        let p2 = projected[edge[1]];
+
+        // Skip if either point is glitching behind camera (safety check)
+        if(p1.scale < 0 || p2.scale < 0) continue;
+
+        // Color Logic
+        let avgW = (p1.w + p2.w) / 2;
+        // Base Hue 190 (Cyan). Add User Offset. Add W-Depth shift.
+        let hue = (190 + config.hueOffset + (avgW * 100)) % 360; 
+        let alpha = 0.3 + (0.5 * (p1.scale + p2.scale));
+
+        ctx.strokeStyle = `hsla(${hue}, 100%, 60%, ${alpha})`;
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+    }
+
+    // 5. Draw Vertices
+    if(config.nodeSize > 0.1) {
+        for(let p of projected) {
+            if(p.scale < 0) continue; // Behind camera check
+
+            let size = p.scale * config.nodeSize;
+            
+            ctx.fillStyle = "#fff";
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, Math.max(0, size/2), 0, Math.PI*2);
+            ctx.fill();
+        }
+    }
+
+    requestAnimationFrame(render);
+}
+
+// --- UI BINDING HELPER ---
+function bind(id, key, subkey=null) {
+    let el = document.getElementById(id);
+    let valDisplay = document.getElementById('v-'+id);
+    if(valDisplay) valDisplay.innerText = el.value;
+
+    el.addEventListener('input', (e) => {
+        let v = parseFloat(e.target.value);
+        if(subkey) config[key][subkey] = v;
+        else config[key] = v;
+        
+        if(valDisplay) valDisplay.innerText = v.toFixed(2);
+
+        // Edge re-calc for connectivity
+        if(id === 'conn') {
+            computedEdges = getEdges(Math.round(v));
+        }
+    });
+}
+
+// Bind all new inputs
+bind('zoom', 'zoom');
+bind('fov', 'fov4');
+bind('speed', 'speed');
+bind('conn', 'connectivity');
+bind('hue', 'hueOffset');
+bind('thick', 'lineThick');
+bind('nodes', 'nodeSize');
+bind('breath', 'breathing');
+bind('rxw', 'manual', 'xw');
+bind('ryw', 'manual', 'yw');
+bind('rzw', 'manual', 'zw');
+
+// --- MOUSE CONTROL ---
+let isDragging = false;
+let lastMouse = { x:0, y:0 };
+
+canvas.addEventListener('mousedown', e => {
+    isDragging = true;
+    lastMouse.x = e.clientX;
+    lastMouse.y = e.clientY;
+});
+
+window.addEventListener('mouseup', () => isDragging = false);
+
+window.addEventListener('mousemove', e => {
+    if(!isDragging) return;
+    let dx = e.clientX - lastMouse.x;
+    let dy = e.clientY - lastMouse.y;
+    
+    config.mouse.x += dx * 0.005;
+    config.mouse.y += dy * 0.005;
+    
+    lastMouse.x = e.clientX;
+    lastMouse.y = e.clientY;
+});
+
+// Boot
+render();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>THE INFINITE SCROLL: SCALE OF REALITY</title>
+    <style>
+        body { margin: 0; background: #080808; overflow: hidden; font-family: 'Courier New', monospace; user-select: none; }
+        canvas { display: block; }
+        
+        #ui {
+            position: absolute; top: 50%; left: 0; width: 100%;
+            pointer-events: none; text-align: center;
+            transform: translateY(-50%);
+        }
+        
+        #scale-readout {
+            font-size: 120px; font-weight: bold; opacity: 0.1; color: #fff;
+            position: absolute; width: 100%; top: 50%; transform: translateY(-50%);
+            z-index: 0;
+        }
+
+        #info {
+            position: absolute; bottom: 50px; width: 100%; text-align: center;
+            color: #0ff; text-shadow: 0 0 10px #0ff; z-index: 10;
+        }
+        h1 { margin: 0; font-size: 24px; letter-spacing: 5px; text-transform: uppercase; }
+        p { font-size: 14px; color: #888; margin-top: 5px; }
+
+        #bar-container {
+            position: absolute; right: 20px; top: 20px; bottom: 20px; width: 4px;
+            background: #222; border-radius: 2px;
+        }
+        #bar-marker {
+            position: absolute; width: 12px; height: 4px; background: #0ff;
+            left: -4px; box-shadow: 0 0 10px #0ff;
+        }
+        .tick { position: absolute; right: 10px; font-size: 10px; color: #444; }
+    </style>
+</head>
+<body>
+
+<div id="scale-readout">10⁰</div>
+
+<div id="ui">
+    </div>
+
+<div id="info">
+    <h1 id="obj-name">HUMAN</h1>
+    <p id="obj-size">1.7 meters</p>
+</div>
+
+<div id="bar-container">
+    <div id="bar-marker"></div>
+</div>
+
+<canvas id="c"></canvas>
+
+<script>
+/**
+ * THE LOGARITHMIC ENGINE
+ * * Instead of x/y/z coordinates, everything exists at a specific "Power of 10" (Exponent).
+ * We render based on the delta between the Camera's Exponent and the Object's Exponent.
+ */
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let width, height, cx, cy;
+
+// --- DATA: THE UNIVERSE ---
+// Size is stored as the Log10 of the size in meters.
+// 0 = 1m, 3 = 1km, -3 = 1mm, etc.
+const UNIVERSE = [
+    { n: "Planck Length", s: -35, c: "#404", icon: "⚛️" },
+    { n: "Quantum Foam", s: -30, c: "#606", icon: "〰️" },
+    { n: "Neutrino", s: -24, c: "#808", icon: "✨" },
+    { n: "Proton", s: -15, c: "#f0f", icon: "🔴" },
+    { n: "Gamma Ray Wavelength", s: -12, c: "#0f0", icon: "〰️" },
+    { n: "Hydrogen Atom", s: -10, c: "#0ff", icon: "🔵" },
+    { n: "DNA Strand", s: -8.5, c: "#f88", icon: "🧬" },
+    { n: "Virus", s: -7, c: "#8f8", icon: "🦠" },
+    { n: "Transistor Gate", s: -7.5, c: "#aaa", icon: "💻" },
+    { n: "Red Blood Cell", s: -5.2, c: "#f00", icon: "🩸" },
+    { n: "Human Hair", s: -4, c: "#aa5", icon: "💇" },
+    { n: "Grain of Sand", s: -3.5, c: "#da4", icon: "🏜️" },
+    { n: "Coffee Bean", s: -2, c: "#642", icon: "☕" },
+    { n: "Human Hand", s: -1, c: "#fb8", icon: "✋" },
+    { n: "Human", s: 0.2, c: "#0af", icon: "🧍" },
+    { n: "Blue Whale", s: 1.5, c: "#00f", icon: "🐋" },
+    { n: "Eiffel Tower", s: 2.5, c: "#aaa", icon: "🗼" },
+    { n: "Mt. Everest", s: 4, c: "#fff", icon: "🏔️" },
+    { n: "Neutron Star", s: 4.3, c: "#0ff", icon: "🌟" },
+    { n: "Earth", s: 7.1, c: "#28f", icon: "🌍" },
+    { n: "Jupiter", s: 7.9, c: "#da8", icon: "🪐" },
+    { n: "Sun", s: 9.1, c: "#fb0", icon: "☀️" },
+    { n: "Stephenson 2-18 (Largest Star)", s: 11.5, c: "#f44", icon: "🔥" },
+    { n: "Solar System", s: 13.5, c: "#668", icon: "🌌" },
+    { n: "Oort Cloud", s: 15.5, c: "#446", icon: "☁️" },
+    { n: "Light Year", s: 15.9, c: "#fff", icon: "📏" },
+    { n: "Nebula", s: 17, c: "#f0f", icon: "✨" },
+    { n: "Milky Way Galaxy", s: 20.9, c: "#a8f", icon: "🌀" },
+    { n: "Local Group", s: 23, c: "#448", icon: "🌑" },
+    { n: "Laniakea Supercluster", s: 25, c: "#88a", icon: "🕸️" },
+    { n: "Observable Universe", s: 26.9, c: "#fff", icon: "✴️" }
+];
+
+// --- STATE ---
+let zoom = 0; // Current power of 10
+let targetZoom = 0;
+let lastScroll = 0;
+
+// --- RENDER LOOP ---
+function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+    cx = width / 2;
+    cy = height / 2;
+    createTicks();
+}
+
+function createTicks() {
+    // Generate tick marks on the right side
+    const bar = document.getElementById('bar-container');
+    bar.innerHTML = '<div id="bar-marker"></div>'; // Reset
+    
+    // Range is approx -35 to 27
+    for (let i = -35; i <= 27; i += 5) {
+        let t = document.createElement('div');
+        t.className = 'tick';
+        t.innerText = "10" + (i < 0 ? i : "+" + i);
+        // Map i to percentage (inverted because top is min)
+        // Wait, standard slider: Top is max or min? Let's make Top = Max (Universe), Bottom = Min (Planck)
+        let pct = 100 - ((i + 35) / (27 + 35)) * 100;
+        t.style.top = pct + "%";
+        bar.appendChild(t);
+    }
+}
+
+window.addEventListener('resize', resize);
+resize();
+
+function formatNumber(num) {
+    if (num >= 10000) return num.toExponential(1);
+    if (num < 0.001) return num.toExponential(1);
+    return parseFloat(num.toPrecision(3));
+}
+
+function update() {
+    // Smooth Zoom Momentum
+    let diff = targetZoom - zoom;
+    zoom += diff * 0.1;
+    
+    // Update UI Marker
+    let range = 27 + 35;
+    let pct = 100 - ((zoom + 35) / range) * 100;
+    document.getElementById('bar-marker').style.top = pct + "%";
+    
+    // Update Big Number Background
+    let p = Math.floor(zoom);
+    document.getElementById('scale-readout').innerText = `10${(p<0?p:"+"+p)}`;
+
+    render();
+    requestAnimationFrame(update);
+}
+
+function render() {
+    // Background Fade
+    // As we get smaller, bg gets darker/quantum. Larger = starry.
+    let bgLightness = 5;
+    if (zoom > 20) bgLightness = 10; // Galaxies
+    if (zoom < -10) bgLightness = 2; // Atoms
+    ctx.fillStyle = `hsl(240, 30%, ${bgLightness}%)`;
+    ctx.fillRect(0, 0, width, height);
+
+    // Grid (The fabric of space)
+    // The grid spacing needs to loop every time we zoom by 1.0
+    // If zoom is 5.4, the grid size should be based on the fractional part .4
+    let gridScale = Math.pow(10, zoom % 1); 
+    // Wait, simpler: We want a grid that effectively zooms infinitely.
+    // We draw multiple overlapping grids fading in and out.
+    
+    drawGrid(zoom, 0.1); // Sub-grid
+    drawGrid(zoom - 1, 0.3); // Main grid
+
+    // Find closest object to update Text
+    let closestDist = Infinity;
+    let closestObj = null;
+
+    // Draw Objects
+    UNIVERSE.forEach(obj => {
+        // Logarithmic Difference
+        // If Object is 10^7 (Earth) and Zoom is 10^9 (Sun), diff is -2.
+        // Earth is 10^-2 (1/100th) of the screen.
+        let delta = obj.s - zoom;
+
+        // Visibility Check
+        // If delta is 0, object is 1 unit (approx half screen width).
+        // If delta is -4, object is 0.0001 (invisible).
+        // If delta is +4, object is 10000 (fills screen).
+        
+        if (delta < -5 || delta > 5) return; // Cull
+
+        // Convert Log Scale to Screen Pixels
+        // Let's say 1 unit = 300px (arbitrary base scale)
+        let baseSize = Math.min(width, height) * 0.4;
+        let scaleFactor = Math.pow(10, delta);
+        let pixelSize = baseSize * scaleFactor;
+        
+        // Alpha Fade
+        // Fade out if too small (< 2px) or too big (covers screen)
+        let alpha = 1.0;
+        if (pixelSize < 10) alpha = (pixelSize - 1) / 9;
+        if (pixelSize > width * 2) alpha = 1 - ((pixelSize - width*2) / width);
+        alpha = Math.max(0, Math.min(1, alpha));
+
+        if (alpha <= 0) return;
+
+        // Track closest for UI
+        if (Math.abs(delta) < closestDist) {
+            closestDist = Math.abs(delta);
+            closestObj = obj;
+        }
+
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.globalAlpha = alpha;
+        
+        // Draw Representation
+        // At small scales, we draw solid circles.
+        // At mid scales, we draw Emojis (for fun/clarity).
+        // At large scales, we add glow.
+        
+        // Glow
+        if (pixelSize > 5) {
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = obj.c;
+        }
+
+        // Shape
+        ctx.beginPath();
+        if (obj.s > 8) { // Stars/Planets -> Circle
+             ctx.fillStyle = obj.c;
+             ctx.arc(0, 0, pixelSize/2, 0, Math.PI*2);
+             ctx.fill();
+        } else {
+             // Use Emoji for biological/human scale
+             // Font size logic
+             let fontSize = pixelSize;
+             if (fontSize > 500) fontSize = 500; // Cap font render size
+             ctx.font = `${fontSize}px Arial`;
+             ctx.textAlign = "center";
+             ctx.textBaseline = "middle";
+             ctx.fillText(obj.icon, 0, 0);
+        }
+
+        // Label (Attached to object)
+        if (pixelSize > 50 && pixelSize < width) {
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = "#fff";
+            ctx.font = "12px Courier New";
+            ctx.fillText(obj.n, 0, pixelSize/2 + 20);
+        }
+
+        ctx.restore();
+    });
+
+    // Update Text info
+    if (closestObj) {
+        document.getElementById('obj-name').innerText = closestObj.n;
+        let meters = Math.pow(10, closestObj.s);
+        document.getElementById('obj-size').innerText = formatSize(meters);
+        document.getElementById('info').style.opacity = 1;
+    }
+}
+
+function drawGrid(z, opacity) {
+    // Draw concentric circles or a grid representing the fabric of space
+    let scale = Math.pow(10, z % 1); // 1 to 10
+    let size = Math.min(width, height) * 0.4 * scale;
+    
+    ctx.strokeStyle = `rgba(255, 255, 255, ${opacity * 0.3})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, size, 0, Math.PI*2);
+    ctx.stroke();
+    
+    // Maybe grid lines?
+    // Let's stick to concentric rings for "Scale" vibe
+    ctx.beginPath();
+    ctx.arc(cx, cy, size * 0.1, 0, Math.PI*2);
+    ctx.stroke();
+}
+
+function formatSize(m) {
+    if (m >= 9.46e15) return (m / 9.46e15).toFixed(2) + " Light Years";
+    if (m >= 1.496e11) return (m / 1.496e11).toFixed(2) + " AU";
+    if (m >= 1000) return (m / 1000).toFixed(2) + " km";
+    if (m >= 1) return m.toFixed(2) + " meters";
+    if (m >= 0.01) return (m * 100).toFixed(2) + " cm";
+    if (m >= 1e-3) return (m * 1000).toFixed(2) + " mm";
+    if (m >= 1e-6) return (m * 1e6).toFixed(2) + " µm";
+    if (m >= 1e-9) return (m * 1e9).toFixed(2) + " nm";
+    if (m >= 1e-12) return (m * 1e12).toFixed(2) + " pm";
+    return m.toExponential(2) + " m";
+}
+
+// --- INPUTS ---
+window.addEventListener('wheel', e => {
+    // Scroll delta varies by browser, usually 100 or 3
+    let d = e.deltaY * 0.002;
+    targetZoom += d;
+    
+    // Bounds
+    if (targetZoom < -36) targetZoom = -36;
+    if (targetZoom > 28) targetZoom = 28;
+});
+
+// Touch support for mobile pinch?
+// Keeping it simple for now, just click to advance
+window.addEventListener('mousedown', (e) => {
+    // Click top half zooms out, bottom zooms in
+    if (e.clientY < height/2) targetZoom += 2;
+    else targetZoom -= 2;
+});
+
+// START
+update();
+
+</script>
+</body>
+</html>

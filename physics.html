@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JS Physics Sandbox</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: 'Courier New', Courier, monospace;
+            color: #0f0;
+            user-select: none; /* Prevent text selection while dragging */
+        }
+        canvas {
+            display: block;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border: 1px solid #0f0;
+            border-radius: 8px;
+            pointer-events: auto;
+        }
+        .control-group {
+            margin-bottom: 10px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+        input[type="range"] {
+            width: 200px;
+            accent-color: #0f0;
+            cursor: pointer;
+        }
+        .instructions {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #aaa;
+            line-height: 1.4;
+        }
+        b { color: #fff; }
+    </style>
+</head>
+<body oncontextmenu="return false;"> <div id="ui">
+        <div class="control-group">
+            <label>Gravity: <span id="gravVal">0.5</span></label>
+            <input type="range" id="gravitySlider" min="-1.0" max="2.0" step="0.1" value="0.5">
+        </div>
+        <div class="control-group">
+            <label>Bounciness: <span id="bounceVal">0.7</span></label>
+            <input type="range" id="bounceSlider" min="0.1" max="1.2" step="0.1" value="0.7">
+        </div>
+        <div class="instructions">
+            <b>Left Click:</b> Spawn Sphere<br>
+            <b>Right Click (Hold):</b> Drag & Throw<br>
+            <b>Middle Click:</b> Clear All
+        </div>
+    </div>
+
+    <canvas id="canvas"></canvas>
+
+<script>
+    // --- SETUP ---
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    let width, height;
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // --- PHYSICS CONFIG ---
+    let gravity = 0.5;
+    let friction = 0.99; // Air resistance
+    let wallBounce = 0.7;
+    
+    // --- STATE ---
+    const balls = [];
+    let draggedBall = null;
+    let mouse = { x: 0, y: 0, prevX: 0, prevY: 0 };
+
+    class Ball {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            this.vx = (Math.random() - 0.5) * 10; // Random initial velocity
+            this.vy = (Math.random() - 0.5) * 10;
+            this.radius = 15 + Math.random() * 20; // Random size
+            
+            // Random Neon Color
+            const colors = ['#ff0055', '#00ffaa', '#00ccff', '#ffcc00', '#cc00ff'];
+            this.color = colors[Math.floor(Math.random() * colors.length)];
+        }
+
+        update() {
+            // If being dragged, physics is controlled by mouse
+            if (this === draggedBall) {
+                this.vx = mouse.x - mouse.prevX; // Calculate velocity for "throwing"
+                this.vy = mouse.y - mouse.prevY;
+                this.x = mouse.x;
+                this.y = mouse.y;
+                return;
+            }
+
+            // Apply Gravity
+            this.vy += gravity;
+            
+            // Apply Velocity
+            this.x += this.vx;
+            this.y += this.vy;
+
+            // Apply Friction
+            this.vx *= friction;
+            this.vy *= friction;
+
+            // Floor/Wall Collisions
+            if (this.y + this.radius > height) {
+                this.y = height - this.radius;
+                this.vy *= -wallBounce;
+            } else if (this.y - this.radius < 0) {
+                this.y = this.radius;
+                this.vy *= -wallBounce;
+            }
+
+            if (this.x + this.radius > width) {
+                this.x = width - this.radius;
+                this.vx *= -wallBounce;
+            } else if (this.x - this.radius < 0) {
+                this.x = this.radius;
+                this.vx *= -wallBounce;
+            }
+        }
+
+        draw() {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = this.color;
+            ctx.fill();
+            
+            // Draw shine
+            ctx.fillStyle = 'rgba(255,255,255,0.3)';
+            ctx.beginPath();
+            ctx.arc(this.x - this.radius*0.3, this.y - this.radius*0.3, this.radius/3, 0, Math.PI*2);
+            ctx.fill();
+
+            // Draw selection ring if dragged
+            if (this === draggedBall) {
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius + 5, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+        }
+    }
+
+    // --- COLLISION RESOLUTION (Simple Circle-Circle) ---
+    function resolveCollisions() {
+        for (let i = 0; i < balls.length; i++) {
+            for (let j = i + 1; j < balls.length; j++) {
+                const b1 = balls[i];
+                const b2 = balls[j];
+
+                // Check distance
+                const dx = b2.x - b1.x;
+                const dy = b2.y - b1.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                const minDist = b1.radius + b2.radius;
+
+                if (distance < minDist) {
+                    // Resolve Overlap (Push them apart)
+                    const angle = Math.atan2(dy, dx);
+                    const overlap = minDist - distance;
+                    
+                    const moveX = Math.cos(angle) * overlap * 0.5;
+                    const moveY = Math.sin(angle) * overlap * 0.5;
+
+                    // Don't move if dragging
+                    if (b1 !== draggedBall) { b1.x -= moveX; b1.y -= moveY; }
+                    if (b2 !== draggedBall) { b2.x += moveX; b2.y += moveY; }
+
+                    // Bounce (Exchange energy)
+                    // Simplistic approach: swap velocities slightly modified by elasticity
+                    // For a robust engine we'd use dot products, but this works for a toy.
+                    const tempVx = b1.vx;
+                    const tempVy = b1.vy;
+                    
+                    // Simple dampening on collision
+                    const bounce = 0.8; 
+                    
+                    if (b1 !== draggedBall) {
+                        b1.vx = (b1.vx * (b1.radius - b2.radius) + (2 * b2.radius * b2.vx)) / (b1.radius + b2.radius) * bounce;
+                        b1.vy = (b1.vy * (b1.radius - b2.radius) + (2 * b2.radius * b2.vy)) / (b1.radius + b2.radius) * bounce;
+                    }
+                    if (b2 !== draggedBall) {
+                        b2.vx = (b2.vx * (b2.radius - b1.radius) + (2 * b1.radius * tempVx)) / (b1.radius + b2.radius) * bounce;
+                        b2.vy = (b2.vy * (b2.radius - b1.radius) + (2 * b1.radius * tempVy)) / (b1.radius + b2.radius) * bounce;
+                    }
+                }
+            }
+        }
+    }
+
+    // --- MAIN LOOP ---
+    function loop() {
+        // Clear screen with trail effect
+        ctx.fillStyle = 'rgba(26, 26, 26, 0.4)'; // The 0.4 creates motion trails
+        ctx.fillRect(0, 0, width, height);
+
+        balls.forEach(b => b.update());
+        resolveCollisions();
+        balls.forEach(b => b.draw());
+
+        requestAnimationFrame(loop);
+    }
+    loop();
+
+    // --- INPUT HANDLING ---
+    
+    // Track mouse position
+    window.addEventListener('mousemove', e => {
+        mouse.prevX = mouse.x;
+        mouse.prevY = mouse.y;
+        mouse.x = e.clientX;
+        mouse.y = e.clientY;
+    });
+
+    window.addEventListener('mousedown', e => {
+        // Left Click (0) -> Spawn
+        if (e.button === 0) {
+            // Don't spawn if clicking UI
+            if (e.target.closest('#ui')) return;
+            balls.push(new Ball(e.clientX, e.clientY));
+        }
+
+        // Middle Click (1) -> Clear
+        if (e.button === 1) {
+            balls.length = 0;
+            e.preventDefault();
+        }
+
+        // Right Click (2) -> Drag
+        if (e.button === 2) {
+            // Find clicked ball
+            const clickedBall = balls.find(b => {
+                const dx = b.x - e.clientX;
+                const dy = b.y - e.clientY;
+                return Math.sqrt(dx*dx + dy*dy) < b.radius;
+            });
+
+            if (clickedBall) {
+                draggedBall = clickedBall;
+            }
+        }
+    });
+
+    window.addEventListener('mouseup', () => {
+        draggedBall = null;
+    });
+
+    // UI Listeners
+    document.getElementById('gravitySlider').oninput = function() {
+        gravity = parseFloat(this.value);
+        document.getElementById('gravVal').innerText = gravity;
+    };
+    document.getElementById('bounceSlider').oninput = function() {
+        wallBounce = parseFloat(this.value);
+        document.getElementById('bounceVal').innerText = wallBounce;
+    };
+
+</script>
+</body>
+</html>

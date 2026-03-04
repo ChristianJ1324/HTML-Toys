@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>VOID.IO - True Spider Physics</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #050505;
+            font-family: 'Courier New', Courier, monospace;
+            color: white;
+            user-select: none;
+        }
+        canvas { display: block; }
+
+        #hud {
+            position: absolute; top: 20px; left: 20px;
+            pointer-events: none;
+        }
+        #score-bar {
+            width: 300px; height: 8px;
+            background: rgba(50,50,50,0.5);
+            border-radius: 4px;
+            overflow: hidden; margin-top: 5px;
+        }
+        #score-fill {
+            width: 0%; height: 100%;
+            background: linear-gradient(90deg, #00ff88, #00ccff);
+            transition: width 0.2s;
+        }
+        h1 { margin: 0; font-size: 20px; letter-spacing: 2px; color: #00ff88; text-shadow: 0 0 10px #00ff88; }
+        p { margin: 5px 0 0 0; color: #aaa; font-size: 12px; }
+
+        #evo-popup {
+            position: absolute; top: 20%; left: 50%; transform: translate(-50%, -50%) scale(0);
+            text-align: center; pointer-events: none;
+            transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        #evo-popup.show { transform: translate(-50%, -50%) scale(1); }
+        #evo-sub { font-size: 14px; color:#00ff88; letter-spacing: 4px; }
+        #evo-text { font-size: 42px; font-weight: bold; color: #fff; text-shadow: 0 0 20px #fff; }
+    </style>
+</head>
+<body>
+
+    <div id="hud">
+        <h1>VOID.IO // ARACHNID</h1>
+        <p>Mass: <span id="mass-val">100</span> | Class: <span id="stage-val">Larva</span></p>
+        <div id="score-bar"><div id="score-fill"></div></div>
+        <p style="margin-top:5px; color:#ffff00;">[SPACE] TO DASH</p>
+    </div>
+
+    <div id="evo-popup">
+        <div id="evo-sub">MUTATION COMPLETE</div>
+        <div id="evo-text">APEX PREDATOR</div>
+    </div>
+
+    <canvas id="c"></canvas>
+
+<script>
+    // --- ENGINE SETUP ---
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    
+    let width, height;
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // --- CONFIG ---
+    const WORLD_SIZE = 4000;
+    const EVOLUTIONS = [
+        { mass: 100, legs: 4, name: "Mite", color: '#00ff88' },
+        { mass: 300, legs: 6, name: "Weaver", color: '#00ccff' },
+        { mass: 800, legs: 8, name: "Widow", color: '#aa00ff' },
+        { mass: 2000, legs: 12, name: "Tarantula", color: '#ff0055' },
+        { mass: 5000, legs: 18, name: "Broodmother", color: '#ffffff' }
+    ];
+
+    // --- MATH ---
+    function lerp(start, end, t) { return start * (1 - t) + end * t; }
+    
+    function solveIK(x, y, tx, ty, len1, len2, flip) {
+        const dx = tx - x;
+        const dy = ty - y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        const d = Math.min(dist, len1 + len2 - 0.1); 
+        const a = (len1*len1 - len2*len2 + d*d) / (2*d);
+        const h = Math.sqrt(Math.max(0, len1*len1 - a*a));
+        const x2 = x + a * (dx/d);
+        const y2 = y + a * (dy/d);
+        const f = flip ? 1 : -1;
+        return {
+            x: x2 + h * (dy/d) * f,
+            y: y2 - h * (dx/d) * f
+        };
+    }
+
+    const camera = { x: 0, y: 0, zoom: 1, targetZoom: 1 };
+
+    // --- GAME CLASSES ---
+
+    class Particle {
+        constructor(x, y, color) {
+            this.x = x; this.y = y;
+            this.life = 1.0;
+            this.vx = (Math.random()-0.5)*10;
+            this.vy = (Math.random()-0.5)*10;
+            this.color = color;
+        }
+        update() {
+            this.x += this.vx; this.y += this.vy;
+            this.life -= 0.05;
+        }
+        draw(ctx) {
+            ctx.globalAlpha = this.life;
+            ctx.fillStyle = this.color;
+            ctx.beginPath(); ctx.arc(this.x, this.y, 4, 0, Math.PI*2); ctx.fill();
+            ctx.globalAlpha = 1.0;
+        }
+    }
+    let particles = [];
+
+    class Food {
+        constructor() { this.respawn(); }
+        respawn() {
+            this.x = (Math.random() - 0.5) * WORLD_SIZE;
+            this.y = (Math.random() - 0.5) * WORLD_SIZE;
+            this.size = 5 + Math.random() * 8;
+            this.color = `hsl(${Math.random()*360}, 70%, 60%)`;
+        }
+        draw(ctx) {
+            ctx.shadowBlur = 10; ctx.shadowColor = this.color;
+            ctx.fillStyle = this.color;
+            ctx.beginPath(); ctx.arc(this.x, this.y, this.size, 0, Math.PI*2); ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+    }
+
+    class Leg {
+        constructor(id, angle, parent) {
+            this.id = id;
+            this.angle = angle; 
+            this.parent = parent;
+            this.attachDist = 10; 
+            
+            this.x = parent.x + Math.cos(angle) * 50;
+            this.y = parent.y + Math.sin(angle) * 50;
+            this.targetX = this.x;
+            this.targetY = this.y;
+            this.stepProgress = 1;
+            this.stepStartX = this.x;
+            this.stepStartY = this.y;
+        }
+
+        update(vx, vy, scale) {
+            const bodyRad = 25 * scale;
+            
+            // 1. Calculate Shoulder
+            const sx = this.parent.x + Math.cos(this.angle) * (this.attachDist * scale);
+            const sy = this.parent.y + Math.sin(this.angle) * (this.attachDist * scale);
+
+            // 2. Calculate Ideal Foot Position (Resting spot)
+            const legReach = 90 * scale; 
+            
+            // Lookahead
+            const idealX = sx + Math.cos(this.angle) * legReach + (vx * 25 * scale);
+            const idealY = sy + Math.sin(this.angle) * legReach + (vy * 25 * scale);
+
+            // 3. Distance check
+            const dx = idealX - this.x;
+            const dy = idealY - this.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            const maxStretch = 130 * scale; 
+
+            // --- THE FIX: NEIGHBOR CHECK ---
+            // A leg can ONLY move if its neighbors are firmly on the ground.
+            // This prevents the "floating spider" look.
+            
+            let canStep = true;
+            if (this.parent.legs.length > 1) {
+                const total = this.parent.legs.length;
+                // Get neighbor indices (wrap around)
+                const nextLeg = this.parent.legs[(this.id + 1) % total];
+                const prevLeg = this.parent.legs[(this.id - 1 + total) % total];
+
+                // If either neighbor is moving (stepProgress < 1), I must wait
+                if (nextLeg.stepProgress < 1 || prevLeg.stepProgress < 1) {
+                    canStep = false;
+                }
+            }
+
+            // Trigger Step if: Overstretched AND Neighbors are grounded
+            if (this.stepProgress >= 1 && dist > maxStretch && canStep) {
+                this.stepProgress = 0;
+                this.stepStartX = this.x;
+                this.stepStartY = this.y;
+                this.targetX = idealX;
+                this.targetY = idealY;
+            }
+
+            // 4. Animate Step
+            if (this.stepProgress < 1) {
+                // Spiders move legs fast
+                this.stepProgress += 0.15; 
+                if (this.stepProgress > 1) this.stepProgress = 1;
+
+                const t = this.stepProgress;
+                // Cubic ease out for snappy movement
+                const ease = 1 - Math.pow(1 - t, 3);
+                
+                this.x = lerp(this.stepStartX, this.targetX, ease);
+                this.y = lerp(this.stepStartY, this.targetY, ease);
+                
+                // Lift leg (Arc)
+                this.y -= Math.sin(t * Math.PI) * (60 * scale);
+            }
+        }
+
+        draw(ctx, scale) {
+            const sx = this.parent.x + Math.cos(this.angle) * (this.attachDist * scale);
+            const sy = this.parent.y + Math.sin(this.angle) * (this.attachDist * scale);
+
+            const boneLen = 70 * scale; 
+            const elbow = solveIK(sx, sy, this.x, this.y, boneLen, boneLen, this.id % 2 === 0);
+
+            ctx.lineWidth = 4 * scale;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            
+            // Bone 1
+            ctx.strokeStyle = '#222'; // Dark inner leg
+            ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(elbow.x, elbow.y); ctx.stroke();
+            
+            // Bone 2
+            ctx.strokeStyle = this.parent.color; // Outer leg matches body glow
+            ctx.beginPath(); ctx.moveTo(elbow.x, elbow.y); ctx.lineTo(this.x, this.y); ctx.stroke();
+
+            // Joint
+            ctx.fillStyle = '#000';
+            ctx.beginPath(); ctx.arc(elbow.x, elbow.y, 4*scale, 0, Math.PI*2); ctx.fill();
+            
+            // Tip
+            ctx.fillStyle = '#fff';
+            ctx.beginPath(); ctx.arc(this.x, this.y, 2*scale, 0, Math.PI*2); ctx.fill();
+        }
+    }
+
+    class Creature {
+        constructor(isPlayer = false) {
+            this.isPlayer = isPlayer;
+            this.x = isPlayer ? 0 : (Math.random()-0.5) * WORLD_SIZE/2;
+            this.y = isPlayer ? 0 : (Math.random()-0.5) * WORLD_SIZE/2;
+            this.legs = [];
+            this.mass = isPlayer ? 100 : 50 + Math.random() * 200;
+            this.scale = 1;
+            this.vx = 0; this.vy = 0;
+            this.stageIdx = 0;
+            this.dashCooldown = 0;
+            this.dashMaxCooldown = 120;
+            this.updateStats();
+            this.aiTimer = 0; this.aiTargetX = this.x; this.aiTargetY = this.y;
+        }
+
+        updateStats() {
+            let stage = EVOLUTIONS[0];
+            for(let i=0; i<EVOLUTIONS.length; i++) {
+                if(this.mass >= EVOLUTIONS[i].mass) {
+                    stage = EVOLUTIONS[i];
+                    this.stageIdx = i;
+                }
+            }
+            this.color = stage.color;
+            this.targetLegCount = stage.legs;
+            this.scale = 0.5 + Math.pow(this.mass / 100, 0.4) * 0.5;
+
+            if (this.legs.length !== this.targetLegCount) {
+                this.legs = [];
+                for(let i=0; i<this.targetLegCount; i++) {
+                    const angle = (i / this.targetLegCount) * Math.PI * 2;
+                    this.legs.push(new Leg(i, angle, this));
+                }
+                if(this.isPlayer) showEvolution(stage.name);
+            }
+        }
+
+        dash(mx, my) {
+            if (this.dashCooldown > 0) return;
+            const dx = mx - this.x; const dy = my - this.y;
+            const angle = Math.atan2(dy, dx);
+            const force = 30 + (this.scale * 3);
+            this.vx += Math.cos(angle) * force;
+            this.vy += Math.sin(angle) * force;
+            this.dashCooldown = this.dashMaxCooldown;
+            for(let i=0; i<12; i++) particles.push(new Particle(this.x, this.y, '#ffff00'));
+        }
+
+        update() {
+            if(this.dashCooldown > 0) this.dashCooldown--;
+            let moveSpeed = 6 + (this.scale);
+            
+            if (this.isPlayer) {
+                const screenMx = mouse.x - width/2;
+                const screenMy = mouse.y - height/2;
+                const worldMx = camera.x + screenMx / camera.zoom;
+                const worldMy = camera.y + screenMy / camera.zoom;
+
+                const dx = worldMx - this.x; const dy = worldMy - this.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                if (dist > 20) {
+                    this.vx += (dx/dist) * 0.9;
+                    this.vy += (dy/dist) * 0.9;
+                }
+                
+                if (keys.space) this.dash(worldMx, worldMy);
+
+                camera.x = lerp(camera.x, this.x, 0.1);
+                camera.y = lerp(camera.y, this.y, 0.1);
+                camera.targetZoom = 1 / Math.pow(this.scale, 0.55);
+                camera.zoom = lerp(camera.zoom, camera.targetZoom, 0.05);
+            } else {
+                this.aiTimer--;
+                if (this.aiTimer <= 0) {
+                    this.aiTimer = 40 + Math.random()*80;
+                    const ang = Math.random() * Math.PI * 2;
+                    const d = 300 + Math.random() * 500;
+                    this.aiTargetX = this.x + Math.cos(ang) * d;
+                    this.aiTargetY = this.y + Math.sin(ang) * d;
+                }
+                const dx = this.aiTargetX - this.x; const dy = this.aiTargetY - this.y;
+                const d = Math.sqrt(dx*dx+dy*dy);
+                if(d > 50) {
+                    this.vx += (dx/d) * 0.6;
+                    this.vy += (dy/d) * 0.6;
+                }
+            }
+
+            this.vx *= 0.9; this.vy *= 0.9;
+
+            if (this.dashCooldown < this.dashMaxCooldown - 10) { 
+                const vel = Math.sqrt(this.vx*this.vx + this.vy*this.vy);
+                if(vel > moveSpeed) {
+                    this.vx = (this.vx/vel) * moveSpeed;
+                    this.vy = (this.vy/vel) * moveSpeed;
+                }
+            }
+            this.x += this.vx; this.y += this.vy;
+            this.legs.forEach(l => l.update(this.vx, this.vy, this.scale));
+        }
+
+        draw(ctx) {
+            this.legs.forEach(l => l.draw(ctx, this.scale)); // Legs behind
+            
+            // Body
+            ctx.fillStyle = '#000';
+            ctx.lineWidth = 3 * this.scale;
+            ctx.strokeStyle = this.color;
+            ctx.shadowColor = this.color;
+            ctx.shadowBlur = 20 * this.scale;
+            ctx.beginPath(); ctx.arc(this.x, this.y, 20 * this.scale, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+            
+            // Dash Bar
+            if(this.isPlayer && this.dashCooldown > 0) {
+                ctx.shadowBlur = 0; ctx.fillStyle = '#333';
+                ctx.fillRect(this.x - 20*this.scale, this.y - 35*this.scale, 40*this.scale, 4*this.scale);
+                ctx.fillStyle = '#ffff00';
+                const pct = 1 - (this.dashCooldown / this.dashMaxCooldown);
+                ctx.fillRect(this.x - 20*this.scale, this.y - 35*this.scale, (40*this.scale)*pct, 4*this.scale);
+            }
+
+            // Eyes
+            ctx.shadowBlur = 0;
+            const ang = Math.atan2(this.vy, this.vx);
+            for(let i=-2; i<=2; i++) {
+                if(i===0) continue; 
+                const eyeOff = i * 0.3;
+                const ex = this.x + Math.cos(ang + eyeOff) * (15 * this.scale);
+                const ey = this.y + Math.sin(ang + eyeOff) * (15 * this.scale);
+                ctx.fillStyle = this.color;
+                ctx.beginPath(); ctx.arc(ex, ey, (3 - Math.abs(i*0.5))*this.scale, 0, Math.PI*2); ctx.fill();
+            }
+        }
+    }
+
+    const player = new Creature(true);
+    const enemies = [];
+    const foods = [];
+    const keys = { space: false };
+
+    for(let i=0; i<300; i++) foods.push(new Food());
+    for(let i=0; i<15; i++) enemies.push(new Creature(false));
+
+    const mouse = { x: 0, y: 0 };
+    window.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+    window.addEventListener('keydown', e => { if(e.code === 'Space') keys.space = true; });
+    window.addEventListener('keyup', e => { if(e.code === 'Space') keys.space = false; });
+
+    function showEvolution(name) {
+        const p = document.getElementById('evo-popup');
+        document.getElementById('evo-text').innerText = name;
+        p.classList.add('show');
+        setTimeout(() => p.classList.remove('show'), 2500);
+    }
+
+    function loop() {
+        ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, width, height);
+
+        ctx.save();
+        ctx.translate(width/2, height/2);
+        ctx.scale(camera.zoom, camera.zoom);
+        ctx.translate(-camera.x, -camera.y);
+
+        ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 2;
+        const gridSize = 300;
+        const vw = width/camera.zoom; const vh = height/camera.zoom;
+        const sx = Math.floor((camera.x - vw)/gridSize)*gridSize;
+        const sy = Math.floor((camera.y - vh)/gridSize)*gridSize;
+        ctx.beginPath();
+        for(let x=sx; x<camera.x+vw; x+=gridSize) { ctx.moveTo(x, camera.y-vh); ctx.lineTo(x, camera.y+vh); }
+        for(let y=sy; y<camera.y+vh; y+=gridSize) { ctx.moveTo(camera.x-vw, y); ctx.lineTo(camera.x+vw, y); }
+        ctx.stroke();
+
+        for(let f of foods) {
+            if(Math.hypot(f.x-player.x, f.y-player.y) < (30*player.scale + f.size)) {
+                player.mass += 5; player.updateStats(); f.respawn();
+            }
+            f.draw(ctx);
+        }
+
+        for(let e of enemies) {
+            e.update(); e.draw(ctx);
+            const d = Math.hypot(e.x-player.x, e.y-player.y);
+            if(d < (30*player.scale + 30*e.scale)) {
+                if(player.mass > e.mass * 1.2) {
+                    player.mass += e.mass/2; player.updateStats();
+                    e.mass = 50 + Math.random()*100; e.x = player.x + 1000; e.updateStats();
+                } else {
+                    const ang = Math.atan2(player.y-e.y, player.x-e.x);
+                    player.vx += Math.cos(ang)*2; player.vy += Math.sin(ang)*2;
+                }
+            }
+        }
+
+        for(let i=particles.length-1; i>=0; i--) {
+            let p = particles[i]; p.update(); p.draw(ctx);
+            if(p.life <= 0) particles.splice(i, 1);
+        }
+
+        player.update(); player.draw(ctx);
+
+        ctx.restore();
+
+        document.getElementById('mass-val').innerText = Math.floor(player.mass);
+        let nextStage = EVOLUTIONS[player.stageIdx + 1];
+        if (nextStage) {
+            const currentBase = EVOLUTIONS[player.stageIdx].mass;
+            const pct = ((player.mass - currentBase) / (nextStage.mass - currentBase)) * 100;
+            document.getElementById('score-fill').style.width = Math.max(0, Math.min(100, pct)) + "%";
+        } else {
+            document.getElementById('score-fill').style.width = "100%";
+        }
+
+        requestAnimationFrame(loop);
+    }
+    loop();
+
+</script>
+</body>
+</html>

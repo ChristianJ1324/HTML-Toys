@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NEUROSWARM v3: Rat King</title>
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #08080c;
+  color: #88ffcc;
+  overflow: hidden;
+  font-family: 'Courier New', Courier, monospace;
+}
+#ui {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(0,0,0,0.85);
+  padding: 15px;
+  border: 1px solid #444;
+  border-radius: 8px;
+  font-size: 12px;
+  pointer-events: none;
+  min-width: 200px;
+}
+#controls { pointer-events: auto; }
+label { display:flex; justify-content:space-between; margin-top:8px; align-items:center; }
+input[type=range] { width:100px; margin-left:10px; cursor: pointer; accent-color: #f05; }
+b { color: #fff; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;}
+.stat-header { color: #f05; margin-top: 10px; font-weight: bold; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="ui">
+  <div><b>NeuroSwarm v3</b></div>
+  <div id="controls">
+      <label>Food Spawn Rate <input id="foodRate" type="range" min="0" max="100" value="50"></label>
+      <label>Mutation Chaos <input id="mutation" type="range" min="0" max="50" value="5"></label>
+      <label>Time Scale <input id="speed" type="range" min="1" max="20" value="1"></label>
+  </div>
+  <div class="stat-header">LIVE DATA</div>
+  <div id="stats"></div>
+</div>
+
+<script>
+/* =================== UTILS =================== */
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const resize = () => { canvas.width = innerWidth; canvas.height = innerHeight; };
+window.addEventListener("resize", resize);
+resize();
+
+const TAU = Math.PI * 2;
+const rand = () => Math.random();
+// Sigmoid: Maps any number to 0...1 (Great for thrust)
+const sigmoid = x => 1 / (1 + Math.exp(-x)); 
+// Tanh: Maps any number to -1...1 (Great for steering)
+const tanh = Math.tanh;
+
+/* =================== BRAIN (Simple MLP) =================== */
+class Brain {
+  constructor(inputSize, outputSize, weights){
+    this.inputSize = inputSize;
+    this.outputSize = outputSize;
+    this.weights = weights || new Float32Array(inputSize * outputSize).map(() => rand() * 4 - 2);
+  }
+
+  clone(mutationRate){
+    const w = new Float32Array(this.weights.length);
+    for(let i=0; i<w.length; i++){
+      w[i] = this.weights[i];
+      // Mutation: Small adjustments, rarely large changes
+      if(rand() < 0.2) w[i] += (rand()*2-1) * mutationRate;
+    }
+    return new Brain(this.inputSize, this.outputSize, w);
+  }
+
+  forward(inputs){
+    const out = new Float32Array(this.outputSize);
+    for(let o=0; o<this.outputSize; o++){
+      let sum = 0;
+      for(let i=0; i<this.inputSize; i++){
+        sum += inputs[i] * this.weights[o*this.inputSize+i];
+      }
+      // Output 0 is Steering (Tanh: Left/Right)
+      // Output 1 is Boost (Sigmoid: 0 to 1)
+      if(o === 0) out[o] = tanh(sum);
+      else out[o] = sigmoid(sum); 
+    }
+    return out;
+  }
+}
+
+/* =================== AGENT =================== */
+class Agent {
+  constructor(x, y, brain, generation = 1){
+    this.x = x; this.y = y;
+    this.vx = 0; this.vy = 0;
+    this.angle = rand() * TAU;
+    
+    // Survival Stats
+    this.energy = 25; // High starting energy so they don't die instantly
+    this.maxEnergy = 100;
+    this.r = 4;
+    this.generation = generation;
+    this.kills = 0;
+    
+    // Inputs:
+    // 0: Food Left Eye
+    // 1: Food Right Eye
+    // 2: Prey Left Eye (Smell of smaller agents)
+    // 3: Prey Right Eye
+    // 4: Predator Proximity (Fear)
+    // 5: Energy Level
+    // 6: Bias (Constant 1)
+    this.brain = brain || new Brain(7, 2);
+    
+    this.hue = rand() * 360;
+  }
+
+  update(agents, foodItems){
+    // 1. Physics & Growth
+    // Size is based on Energy, but capped
+    const targetR = 4 + (this.energy * 0.15); 
+    this.r = this.r * 0.9 + targetR * 0.1; // Smooth growth
+    
+    // 2. Vision (Binocular)
+    const vision = this.getVision(agents, foodItems);
+    
+    // 3. Brain Processing
+    const inputs = [
+        vision.foodLeft,
+        vision.foodRight,
+        vision.preyLeft,
+        vision.preyRight,
+        vision.predatorDist, // Fear
+        this.energy / 100,
+        1 // Bias
+    ];
+    
+    const output = this.brain.forward(inputs);
+    
+    // 4. Movement
+    const steer = output[0]; // -1 (Left) to 1 (Right)
+    const thrust = output[1]; // 0 (Stop) to 1 (Fast)
+
+    this.angle += steer * 0.2;
+    
+    // Base speed + Boost
+    // Larger agents move slower
+    const speed = (2 * thrust) * (10 / (this.r + 5)); 
+    
+    this.vx += Math.cos(this.angle) * speed * 0.2;
+    this.vy += Math.sin(this.angle) * speed * 0.2;
+    
+    this.x += this.vx;
+    this.y += this.vy;
+    this.vx *= 0.9; this.vy *= 0.9; // Friction
+
+    // Wrap World
+    if(this.x < 0) this.x = canvas.width;
+    if(this.x > canvas.width) this.x = 0;
+    if(this.y < 0) this.y = canvas.height;
+    if(this.y > canvas.height) this.y = 0;
+
+    // 5. Metabolism
+    // Existing costs energy. Moving fast costs more. Spinning costs more.
+    const cost = 0.05 + (this.r * 0.005) + (thrust * 0.05) + (Math.abs(steer) * 0.05);
+    this.energy -= cost;
+  }
+
+  // Binocular Vision Logic
+  getVision(agents, foodItems){
+    let fL = 0, fR = 0; // Food Eyes
+    let pL = 0, pR = 0; // Prey Eyes
+    let predD = 0;      // Predator Sensor
+
+    // LOOK FOR FOOD
+    // Optimization: Only check nearest food? No, check all within range.
+    for(const f of foodItems){
+        const d = (this.x-f.x)**2 + (this.y-f.y)**2;
+        if(d < 25000){ // Vision Range 150px
+            const angleTo = Math.atan2(f.y-this.y, f.x-this.x);
+            const relAngle = this.getRelAngle(angleTo);
+            const intensity = 1 - (d/25000); // Closer = Brighter
+
+            // Binocular split
+            if(relAngle > -0.5 && relAngle < 0.2) fR += intensity;
+            if(relAngle > -0.2 && relAngle < 0.5) fL += intensity;
+        }
+    }
+
+    // LOOK FOR OTHERS
+    for(const a of agents){
+        if(a === this) continue;
+        const d = (this.x-a.x)**2 + (this.y-a.y)**2;
+        
+        if(d < 40000){ // Vision Range 200px
+            const sizeRatio = this.r / a.r;
+            
+            // IS IT PREY? (I am 20% bigger)
+            if(sizeRatio > 1.2){
+                const angleTo = Math.atan2(a.y-this.y, a.x-this.x);
+                const relAngle = this.getRelAngle(angleTo);
+                const intensity = (1 - (d/40000)) * 2; // Prey shines bright
+                
+                if(relAngle > -0.6 && relAngle < 0.2) pR += intensity;
+                if(relAngle > -0.2 && relAngle < 0.6) pL += intensity;
+            }
+            
+            // IS IT A PREDATOR? (They are 20% bigger)
+            if(sizeRatio < 0.8){
+               const intensity = 1 - (d/40000);
+               if(intensity > predD) predD = intensity;
+            }
+        }
+    }
+
+    return { 
+        foodLeft: Math.min(1, fL), foodRight: Math.min(1, fR),
+        preyLeft: Math.min(1, pL), preyRight: Math.min(1, pR),
+        predatorDist: predD 
+    };
+  }
+
+  getRelAngle(targetAngle){
+      let a = targetAngle - this.angle;
+      while(a > Math.PI) a -= TAU;
+      while(a < -Math.PI) a += TAU;
+      return a;
+  }
+
+  draw(isBest){
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.angle);
+    
+    // Draw Body
+    ctx.beginPath();
+    // Color depends on health. Red = Hungry, Green = Full
+    // If Best, give Gold halo
+    if(isBest){
+         ctx.shadowBlur = 15;
+         ctx.shadowColor = "#ff0";
+         ctx.strokeStyle = "#ff0";
+         ctx.lineWidth = 2;
+         ctx.stroke();
+    }
+    
+    // Prey hunters get redder, Vegans get greener
+    const huntFactor = Math.min(1, this.kills / 5); 
+    const r = 50 + huntFactor * 200;
+    const g = 255 - huntFactor * 200;
+    
+    ctx.fillStyle = `rgba(${r},${g},100, ${this.energy/this.maxEnergy + 0.2})`;
+    ctx.arc(0, 0, this.r, 0, TAU);
+    ctx.fill();
+
+    // Draw Eyes (Visual Debugging)
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(this.r*0.6, -this.r*0.4, this.r*0.3, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(this.r*0.6, this.r*0.4, this.r*0.3, 0, TAU); ctx.fill();
+
+    // Draw Spikes if Killer
+    if(this.kills > 0){
+        ctx.fillStyle = "#f05";
+        ctx.beginPath();
+        ctx.moveTo(this.r, 0);
+        ctx.lineTo(this.r+5, 0);
+        ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+}
+
+/* =================== SYSTEM =================== */
+const foodItems = [];
+let agents = [];
+let bestAgentBrain = null;
+let maxKillsRecord = 0;
+
+// Initialize
+for(let i=0; i<50; i++) agents.push(new Agent(rand()*canvas.width, rand()*canvas.height));
+
+function spawnFood(n){
+    for(let i=0; i<n; i++){
+        foodItems.push({ x: rand()*canvas.width, y: rand()*canvas.height });
+    }
+}
+spawnFood(100);
+
+/* =================== LOOP =================== */
+function loop(){
+    // Background Trail
+    ctx.fillStyle = "rgba(8, 8, 12, 0.2)";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    const speed = +document.getElementById("speed").value;
+    for(let i=0; i<speed; i++) simulationStep();
+
+    draw();
+    updateUI();
+    requestAnimationFrame(loop);
+}
+
+function simulationStep(){
+    const mutationRate = document.getElementById("mutation").value * 0.01;
+    const foodRate = document.getElementById("foodRate").value;
+
+    // Spawn Food
+    if(rand() * 100 < foodRate) spawnFood(1);
+    if(foodItems.length < 50) spawnFood(1); // Floor limit
+
+    // Sort agents by energy to find "The Best" easily
+    agents.sort((a,b) => b.energy - a.energy);
+    const bestAgent = agents[0];
+    if(bestAgent && bestAgent.energy > 50) bestAgentBrain = bestAgent.brain;
+
+    // Update Agents
+    for(let i = agents.length - 1; i >= 0; i--){
+        const a = agents[i];
+        a.update(agents, foodItems);
+
+        // Interaction: Eat Food
+        for(let f = foodItems.length - 1; f >= 0; f--){
+            const fd = foodItems[f];
+            if((a.x-fd.x)**2 + (a.y-fd.y)**2 < (a.r+5)**2){
+                foodItems.splice(f, 1);
+                a.energy += 8; // Food Energy
+            }
+        }
+
+        // Interaction: Eat Agents (Rat King)
+        for(let j = agents.length - 1; j >= 0; j--){
+            if(i === j) continue;
+            const b = agents[j];
+            const dist = (a.x-b.x)**2 + (a.y-b.y)**2;
+            const minDist = (a.r + b.r)**2; // Touch
+
+            if(dist < minDist){
+                // Collision Logic
+                if(a.r > b.r * 1.2){
+                    // A eats B
+                    a.energy += b.energy + 10; // Massive Reward
+                    a.kills++;
+                    if(a.kills > maxKillsRecord) maxKillsRecord = a.kills;
+                    b.energy = -100; // Kill B
+                }
+            }
+        }
+
+        // Death
+        if(a.energy <= 0){
+            // Corpse explosion (Recycle energy back to world)
+            if(a.r > 8){
+                const meatChunks = Math.floor(a.r);
+                for(let m=0; m<meatChunks; m++){
+                    foodItems.push({ 
+                        x: a.x + rand()*20-10, 
+                        y: a.y + rand()*20-10 
+                    });
+                }
+            }
+            agents.splice(i, 1);
+            continue;
+        }
+
+        // Reproduction
+        // Requirements: High Energy OR High Kills (Evolution favors killers)
+        if(a.energy > 80){
+            a.energy -= 30;
+            const child = new Agent(a.x, a.y, a.brain.clone(mutationRate), a.generation+1);
+            agents.push(child);
+        }
+    }
+
+    // Extinction Prevention (The Safety Net)
+    if(agents.length < 15){
+        // If we have a "Best Brain" stored, clone it.
+        // Otherwise, make a random one.
+        let newBrain = bestAgentBrain ? bestAgentBrain.clone(mutationRate) : null;
+        agents.push(new Agent(rand()*canvas.width, rand()*canvas.height, newBrain));
+    }
+}
+
+function draw(){
+    // Draw Food
+    ctx.fillStyle = "#2f6";
+    for(const f of foodItems){
+        ctx.fillRect(f.x-1, f.y-1, 3, 3);
+    }
+    
+    // Draw Agents
+    const best = agents[0]; // Since we sort them every frame
+    for(const a of agents){
+        a.draw(a === best);
+    }
+}
+
+function updateUI(){
+    document.getElementById("stats").innerHTML = `
+    Agents: ${agents.length}<br>
+    Food: ${foodItems.length}<br>
+    Gen: ${agents[0] ? agents[0].generation : 0}<br>
+    Top Kills: ${maxKillsRecord}<br>
+    <br>
+    <span style="color:#aaa">Tip: Reduce Food Rate<br>to force cannibalism.</span>
+    `;
+}
+
+loop();
+</script>
+</body>
+</html>

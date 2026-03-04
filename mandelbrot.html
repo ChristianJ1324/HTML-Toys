@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Evolving Sea Turtles</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #222;
+            font-family: sans-serif;
+        }
+        canvas {
+            display: block;
+            margin: 0 auto;
+            background: #F2D2A9; /* Sand color */
+            cursor: crosshair;
+        }
+        #stats {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.6);
+            color: #fff;
+            padding: 10px;
+            border-radius: 5px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="stats">
+        Generation: <span id="gen-count">1</span><br>
+        Turtles Reached Ocean: <span id="success-count">0</span><br>
+        Avg Speed Gene: <span id="avg-speed">1.00</span>
+    </div>
+    <canvas id="simCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('simCanvas');
+    const ctx = canvas.getContext('2d');
+    const genDisplay = document.getElementById('gen-count');
+    const successDisplay = document.getElementById('success-count');
+    const speedDisplay = document.getElementById('avg-speed');
+
+    let width, height, oceanBoundary;
+
+    function resize() {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+        oceanBoundary = height * 0.75; // Ocean starts at 75% down the screen
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // --- Simulation Parameters ---
+    let turtles = [];
+    let generation = 1;
+    let successfulTurtles = 0;
+    let totalSpeedSum = 0;
+    let totalSpeedCount = 0;
+    const MUTATION_RATE = 0.15; // How much speed can change per generation (+/- 15%)
+    const BASE_SPEED = 1.0;
+    const MAX_TURTLES = 150; // Performance limit
+
+    class Turtle {
+        constructor(x, y, parentGenes) {
+            this.x = x;
+            this.y = y;
+            this.size = Math.random() * 4 + 6; // Slight size variation
+            this.age = 0;
+            this.state = 'egg'; // egg, hatching, moving, swimming, dead
+
+            // --- Genetics & Evolution ---
+            if (parentGenes) {
+                // Mutate the speed gene
+                let mutationFactor = 1 + (Math.random() * 2 - 1) * MUTATION_RATE;
+                this.speedGene = parentGenes.speed * mutationFactor;
+                // Clamp speed reasonable limits
+                this.speedGene = Math.max(0.4, Math.min(this.speedGene, 3.5));
+                this.generation = parentGenes.generation + 1;
+            } else {
+                // Initial population
+                this.speedGene = BASE_SPEED + (Math.random() * 0.4 - 0.2);
+                this.generation = 1;
+            }
+
+            // Visualizing genes: Faster turtles are greener, slower are browner
+            const greenness = Math.min(255, Math.floor((this.speedGene / BASE_SPEED) * 150));
+            const redness = 255 - greenness;
+            this.color = `rgb(${redness}, ${greenness}, 50)`;
+            
+            this.hatchTimer = Math.random() * 100 + 50; // Time before they start moving
+        }
+
+        update() {
+            this.age++;
+
+            switch (this.state) {
+                case 'egg':
+                    if (this.age > this.hatchTimer) {
+                        this.state = 'hatching';
+                        this.hatchTimer = 30; // Reuse timer for hatching animation duration
+                        this.age = 0;
+                    }
+                    break;
+                case 'hatching':
+                    if (this.age > this.hatchTimer) {
+                        this.state = 'moving';
+                    }
+                    break;
+                case 'moving':
+                    // Move towards ocean with slight wiggle
+                    this.y += this.speedGene * (0.5 + Math.random());
+                    this.x += (Math.random() - 0.5) * 1.5;
+
+                    // Selection pressure: Small chance to die if too slow on sand long term
+                    if (this.age > 800 && Math.random() < 0.005 / this.speedGene) {
+                         this.state = 'dead';
+                    }
+
+                    // Check if reached ocean
+                    if (this.y > oceanBoundary) {
+                        this.state = 'swimming';
+                        this.onReachOcean();
+                    }
+                    break;
+                case 'swimming':
+                    // Move faster and smoother in water
+                    this.y += this.speedGene * 1.5;
+                    this.x += (Math.random() - 0.5) * 0.5;
+                    break;
+            }
+        }
+
+        onReachOcean() {
+            successfulTurtles++;
+            // Update stats
+            if (this.generation > generation) {
+                generation = this.generation;
+            }
+            totalSpeedSum += this.speedGene;
+            totalSpeedCount++;
+
+            // --- Breeding/Reproduction ---
+            // Successful turtle "lays eggs" back at the start for the next generation
+            // Ensure we don't have too many turtles
+            if (turtles.length < MAX_TURTLES) {
+                 spawnTurtle(true, { speed: this.speedGene, generation: this.generation });
+                 // Small chance for a second offspring for very fast ones
+                 if(this.speedGene > BASE_SPEED * 1.8 && Math.random() > 0.5) {
+                     spawnTurtle(true, { speed: this.speedGene, generation: this.generation });
+                 }
+            }
+        }
+
+        draw() {
+            if (this.state === 'dead') {
+                ctx.fillStyle = '#5e4b3b'; // Dried out color
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size -2, 0, Math.PI * 2);
+                ctx.fill();
+                return;
+            }
+
+            ctx.save();
+            ctx.translate(this.x, this.y);
+
+            if (this.state === 'egg') {
+                 ctx.fillStyle = '#FFFDD0'; // Eggshell color
+                 ctx.beginPath();
+                 ctx.ellipse(0, 0, this.size/1.5, this.size/1.2, Math.PI / 4, 0, Math.PI * 2);
+                 ctx.fill();
+                 ctx.strokeStyle = '#ccc';
+                 ctx.stroke();
+            } else {
+                // Draw Turtle body
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                // Ellipse for body, oriented downwards
+                ctx.ellipse(0, 0, this.size, this.size * 1.2, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#333';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                // Simple Flippers
+                ctx.strokeStyle = this.color;
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(-this.size+2, -2); ctx.lineTo(-this.size - 5, 5); // Front Left
+                ctx.moveTo(this.size-2, -2);  ctx.lineTo(this.size + 5, 5); // Front Right
+                ctx.moveTo(-this.size+4, this.size); ctx.lineTo(-this.size - 2, this.size+4); // Back Left
+                ctx.moveTo(this.size-4, this.size);  ctx.lineTo(this.size + 2, this.size+4); // Back Right
+                ctx.stroke();
+
+                // Head
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(0, this.size+2, this.size/2.5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.restore();
+        }
+    }
+
+    function spawnTurtle(isOffspring = false, parentGenes = null) {
+        // Spawn anywhere horizontally, but at the top (beach area)
+        const x = Math.random() * width;
+        const y = Math.random() * (oceanBoundary * 0.15) + 20; // Top 15% of beach
+        turtles.push(new Turtle(x, y, parentGenes));
+    }
+
+    // Initial Population
+    for (let i = 0; i < 30; i++) {
+        spawnTurtle();
+    }
+
+    // Main Animation Loop
+    function animate() {
+        ctx.clearRect(0, 0, width, height);
+
+        // 1. Draw Environment
+        // Sand is background color.
+        // Draw Ocean
+        ctx.fillStyle = 'rgba(64, 164, 223, 0.8)';
+        ctx.fillRect(0, oceanBoundary, width, height - oceanBoundary);
+
+        // Draw "Wet Sand" boundary line
+        ctx.beginPath();
+        ctx.moveTo(0, oceanBoundary);
+        ctx.lineTo(width, oceanBoundary);
+        ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+        ctx.lineWidth = 5;
+        ctx.stroke();
+        
+        // Slowly trickle in new random turtles if population gets low (migration)
+        if (turtles.length < 20 && Math.random() < 0.02) {
+             spawnTurtle();
+        }
+
+        // 2. Update and Draw Turtles
+        // Iterate backwards so we can splice safely
+        for (let i = turtles.length - 1; i >= 0; i--) {
+            const t = turtles[i];
+            t.update();
+            t.draw();
+
+            // Cleanup: remove turtles that are far off screen or dead too long
+            if (t.y > height + 50 || (t.state === 'dead' && t.age > 1200)) {
+                turtles.splice(i, 1);
+            }
+        }
+
+        // 3. Update HUD stats
+        genDisplay.textContent = generation;
+        successDisplay.textContent = successfulTurtles;
+        if (totalSpeedCount > 0) {
+            speedDisplay.textContent = (totalSpeedSum / totalSpeedCount).toFixed(2);
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    // Start simulation
+    animate();
+
+    // Allow clicking to add a turtle manually
+    canvas.addEventListener('click', (e) => {
+         turtles.push(new Turtle(e.clientX, e.clientY));
+    });
+
+</script>
+</body>
+</html>
